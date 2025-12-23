@@ -1,0 +1,5 @@
+{
+  "name": "GameProxy Sniffer Pro",
+  "description": "A professional-grade UI for game packet capturing, featuring process injection status, real-time TCP/UDP monitoring, and hex data inspection.",
+  "requestFramePermissions": []
+}
