@@ -201,7 +201,6 @@ const App: React.FC = () => {
     } else {
       setGlobalHooksEnabled(false);
       setIsCapturing(false);
-      // We keep status as HOOKED (but inactive) or revert to INJECTED
       setInjectionStatus(InjectionStatus.INJECTED);
     }
   };
@@ -668,7 +667,7 @@ const App: React.FC = () => {
                     <th className="px-4 py-2 w-16 text-center">DIR</th>
                     <th className="px-4 py-2 w-32">ADDR</th>
                     <th className="px-4 py-2 w-16 text-right">LEN</th>
-                    <th className="px-4 py-2">HEX DATA STREAM</th>
+                    <th className="px-4 py-2">HEX DATA STREAM (Click row for full data)</th>
                     <th className="px-4 py-2 w-24 text-center">HOOK</th>
                   </tr>
                 </thead>
@@ -686,7 +685,7 @@ const App: React.FC = () => {
                       <td className="px-4 py-1.5 text-center">{pkt.direction === 'IN' ? <span className="text-emerald-500">←</span> : <span className="text-amber-500">→</span>}</td>
                       <td className="px-4 py-1.5 text-slate-300 truncate max-w-[120px]">{pkt.remoteAddr}</td>
                       <td className="px-4 py-1.5 text-right font-medium">{pkt.length}</td>
-                      <td className="px-4 py-1.5 opacity-60 truncate max-w-2xl">
+                      <td className="px-4 py-1.5 opacity-60 truncate max-w-2xl font-mono">
                         {pkt.isBlocked ? <span className="line-through text-rose-500/50">{pkt.data}</span> : pkt.data}
                       </td>
                       <td className="px-4 py-1.5 text-center">
@@ -700,7 +699,7 @@ const App: React.FC = () => {
           </div>
 
           {/* Inspector Tabs */}
-          <div className="h-80 border-t border-slate-800 bg-slate-950 flex flex-col shadow-2xl">
+          <div className="h-[26rem] border-t border-slate-800 bg-slate-950 flex flex-col shadow-2xl">
             <div className="h-10 bg-slate-900/50 border-b border-slate-800 flex items-center px-4 justify-between">
               <div className="flex h-full">
                 {(['HEX', 'EDIT', 'RULES'] as const).map(tab => (
@@ -719,7 +718,7 @@ const App: React.FC = () => {
                     <input type="text" placeholder="Find pattern (?? for wildcard)..." value={hexSearchTerm} onChange={e => setHexSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-slate-300 w-48" />
                   </div>
                 )}
-                {selectedPacket && <span>LEN: <span className="text-cyan-500 font-bold">{selectedPacket.length}</span></span>}
+                {selectedPacket && <span>LEN: <span className="text-cyan-500 font-bold">{selectedPacket.length}</span> BYTES</span>}
               </div>
             </div>
 
@@ -731,13 +730,14 @@ const App: React.FC = () => {
                       <div className="bg-rose-950 border border-rose-500 text-rose-500 px-6 py-2 rounded-full font-bold uppercase text-lg rotate-12 opacity-50 shadow-2xl">PACKET DROPPED BY RULE</div>
                     </div>
                   )}
-                  <div className="flex-1 overflow-auto p-4 font-mono text-[13px] leading-relaxed scrollbar-thin">
+                  <div className="flex-1 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed scrollbar-thin scroll-smooth">
                     {selectedPacket ? (
-                      <div className="flex gap-8 min-w-max" onMouseLeave={() => setHoveredByteIndex(null)}>
+                      <div className="flex gap-8 min-w-max pb-8" onMouseLeave={() => setHoveredByteIndex(null)}>
+                        {/* Hex Columns */}
                         <div className="flex flex-col gap-1">
                           {hexLines.map((line, lineIdx) => (
                             <div key={lineIdx} className="flex gap-4 items-center">
-                              <div className="text-slate-700 text-right w-16 border-r border-slate-800 pr-3 select-none">{(lineIdx * 16).toString(16).padStart(4, '0').toUpperCase()}</div>
+                              <div className="text-slate-700 text-right w-16 border-r border-slate-800 pr-3 select-none font-bold">{(lineIdx * 16).toString(16).padStart(4, '0').toUpperCase()}</div>
                               <div className="grid grid-cols-16 gap-x-2 text-slate-300">
                                 {line.map((byte, byteIdx) => {
                                   const globalIdx = lineIdx * 16 + byteIdx;
@@ -746,7 +746,7 @@ const App: React.FC = () => {
                                   const isMatching = isByteMatchingSearch(globalIdx);
                                   
                                   return (
-                                    <div key={byteIdx} className="relative group/byte">
+                                    <div key={byteIdx} className="relative group/byte w-6">
                                       <span onMouseDown={() => startSelection(globalIdx)} onMouseEnter={() => updateSelection(globalIdx)} 
                                         className={`px-1 rounded cursor-crosshair transition-all block text-center ${
                                           isSelected 
@@ -771,9 +771,10 @@ const App: React.FC = () => {
                             </div>
                           ))}
                         </div>
-                        <div className="flex flex-col gap-1 border-l border-slate-800 pl-4 select-none opacity-50">
+                        {/* ASCII View - Synced Vertical Flow */}
+                        <div className="flex flex-col gap-1 border-l border-slate-800 pl-4 select-none opacity-60">
                           {hexLines.map((line, lineIdx) => (
-                            <div key={lineIdx} className="text-slate-600 flex">
+                            <div key={lineIdx} className="text-slate-600 flex font-mono h-[1.5rem] items-center">
                               {line.map((byte, byteIdx) => {
                                 const globalIdx = lineIdx * 16 + byteIdx;
                                 const char = parseInt(byte, 16) >= 32 && parseInt(byte, 16) <= 126 ? String.fromCharCode(parseInt(byte, 16)) : '.';
@@ -785,18 +786,28 @@ const App: React.FC = () => {
                           ))}
                         </div>
                       </div>
-                    ) : <div className="h-full flex items-center justify-center text-slate-800 font-bold uppercase text-[10px]">Select a packet stream</div>}
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-800 gap-2">
+                         <Terminal className="w-12 h-12 opacity-10" />
+                         <div className="font-bold uppercase text-[10px] tracking-widest opacity-30">Select a packet from the list to inspect full data</div>
+                      </div>
+                    )}
                   </div>
                   {interpretation && (
-                    <div className="w-56 border-l border-slate-800 bg-slate-900/20 p-4">
+                    <div className="w-64 border-l border-slate-800 bg-slate-900/20 p-4">
                       <div className="flex items-center gap-2 mb-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest"><BarChart3 className="w-3.5 h-3.5" /> Interpreter</div>
                       <div className="space-y-3">
                         {interpretation.map((item, i) => (
                           <div key={i} className="flex flex-col border-b border-slate-800/30 pb-1.5 last:border-0">
                             <span className="text-[9px] text-slate-500 font-bold uppercase">{item.label}</span>
-                            <span className="text-xs font-mono text-cyan-400">{item.val}</span>
+                            <span className="text-xs font-mono text-cyan-400 font-bold">{item.val}</span>
                           </div>
                         ))}
+                      </div>
+                      <div className="mt-8 p-3 rounded bg-slate-900/50 border border-slate-800">
+                        <p className="text-[9px] text-slate-500 leading-tight">
+                          Pro Tip: Select multiple bytes in the Hex view to interpret them as wider data types (Int16, Int32, Float).
+                        </p>
                       </div>
                     </div>
                   )}
@@ -827,7 +838,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
               ) : (
-                <div className="h-full p-6 overflow-auto bg-slate-950 grid grid-cols-2 gap-6">
+                <div className="h-full p-6 overflow-auto bg-slate-950 grid grid-cols-2 gap-6 scrollbar-thin">
                    <div className="flex flex-col gap-4">
                      <div className="flex items-center justify-between">
                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><ArrowRightLeft className="w-4 h-4" /> Configured Rules</h3>
