@@ -33,9 +33,14 @@ import {
   History,
   Send,
   Ban,
-  Scissors
+  Scissors,
+  Anchor,
+  RefreshCw,
+  Power,
+  ToggleLeft as Toggle,
+  ZapOff
 } from 'lucide-react';
-import { Packet, TargetProcess, InjectionStatus, Protocol } from './types';
+import { Packet, TargetProcess, InjectionStatus, Protocol, HookType } from './types';
 import { MOCK_PROCESSES, MOCK_PACKETS } from './constants';
 
 interface TamperRule {
@@ -46,6 +51,7 @@ interface TamperRule {
   action: 'REPLACE' | 'BLOCK';
   active: boolean;
   hits: number;
+  hook: HookType;
 }
 
 type ExtendedPacket = Packet & { 
@@ -73,6 +79,8 @@ const TrafficGraph: React.FC<{ data: number[] }> = ({ data }) => {
 };
 
 const App: React.FC = () => {
+  const [processes, setProcesses] = useState<TargetProcess[]>(MOCK_PROCESSES);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedProcess, setSelectedProcess] = useState<TargetProcess | null>(null);
   const [injectionStatus, setInjectionStatus] = useState<InjectionStatus>(InjectionStatus.NONE);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -81,17 +89,30 @@ const App: React.FC = () => {
   const [filterText, setFilterText] = useState('');
   const [hexSearchTerm, setHexSearchTerm] = useState('');
   const [protocolFilter, setProtocolFilter] = useState<Protocol | 'ALL'>('ALL');
+  const [hookFilter, setHookFilter] = useState<HookType | 'ALL'>('ALL');
   const [showProcessList, setShowProcessList] = useState(false);
   const [hoveredByteIndex, setHoveredByteIndex] = useState<number | null>(null);
   const [trafficData, setTrafficData] = useState<number[]>(new Array(20).fill(0));
   const [replayingId, setReplayingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'HEX' | 'EDIT' | 'RULES'>('HEX');
   
+  // Hook Activation State
+  const [globalHooksEnabled, setGlobalHooksEnabled] = useState(false);
+  const [hookSettings, setHookSettings] = useState<Record<HookType, boolean>>({
+    'send': true,
+    'recv': true,
+    'sendto': true,
+    'recvfrom': true,
+    'WSASend': true,
+    'WSARecv': true,
+    'ALL': true
+  });
+
   // Replacement Logic State
   const [editBuffer, setEditBuffer] = useState('');
   const [tamperRules, setTamperRules] = useState<TamperRule[]>([
-    { id: '1', name: 'Gold Bypass', match: '0F 00 01', replace: 'FF FF FF', action: 'REPLACE', active: false, hits: 12 },
-    { id: '2', name: 'Anti-Cheat Heartbeat Block', match: 'DE AD BE EF', replace: '', action: 'BLOCK', active: true, hits: 8 }
+    { id: '1', name: 'Gold Bypass', match: '0F ?? 01', replace: 'FF FF FF', action: 'REPLACE', active: false, hits: 12, hook: 'recv' },
+    { id: '2', name: 'Anti-Cheat Heartbeat Block', match: 'DE AD BE EF', replace: '', action: 'BLOCK', active: true, hits: 8, hook: 'send' }
   ]);
 
   // Form states for new/editing rules
@@ -99,6 +120,7 @@ const App: React.FC = () => {
   const [newRuleMatch, setNewRuleMatch] = useState('');
   const [newRuleReplace, setNewRuleReplace] = useState('');
   const [newRuleAction, setNewRuleAction] = useState<'REPLACE' | 'BLOCK'>('REPLACE');
+  const [newRuleHook, setNewRuleHook] = useState<HookType>('ALL');
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   // Selection states
@@ -115,14 +137,44 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const handleRefreshProcesses = useCallback(() => {
+    setIsRefreshing(true);
+    setTimeout(() => {
+      const shuffled = [...MOCK_PROCESSES].sort(() => Math.random() - 0.5);
+      setProcesses(shuffled);
+      setIsRefreshing(false);
+    }, 800);
+  }, []);
+
+  const formatHexInput = (val: string) => {
+    const cleaned = val.toUpperCase().replace(/[^0-9A-F?]/g, '');
+    const chunks = cleaned.match(/.{1,2}/g) || [];
+    return chunks.join(' ');
+  };
+
+  const hexToRegexSpaced = useCallback((pattern: string) => {
+    const cleaned = pattern.toUpperCase().replace(/[^0-9A-F?]/g, '');
+    if (!cleaned) return null;
+    const chunks = cleaned.match(/.{1,2}/g) || [];
+    const regexParts = chunks.map(chunk => chunk.replace(/\?/g, '[0-9A-F]'));
+    const regexStr = regexParts.join('\\s+');
+    try {
+      return new RegExp(regexStr, 'i');
+    } catch (e) {
+      return null;
+    }
+  }, []);
+
   const filteredPackets = useMemo(() => {
     return packets.filter(p => {
       const matchesProtocol = protocolFilter === 'ALL' || p.protocol === protocolFilter;
+      const matchesHook = hookFilter === 'ALL' || p.sourceHook === hookFilter;
+      const regex = hexToRegexSpaced(filterText);
       const matchesSearch = p.remoteAddr.includes(filterText) || 
-                          p.data.toLowerCase().includes(filterText.toLowerCase());
-      return matchesProtocol && matchesSearch;
+                          (regex ? regex.test(p.data) : p.data.toLowerCase().includes(filterText.toLowerCase()));
+      return matchesProtocol && matchesHook && matchesSearch;
     });
-  }, [packets, protocolFilter, filterText]);
+  }, [packets, protocolFilter, hookFilter, filterText, hexToRegexSpaced]);
 
   const selectedPacket = useMemo(() => 
     packets.find(p => p.id === selectedPacketId), 
@@ -137,15 +189,30 @@ const App: React.FC = () => {
     setInjectionStatus(InjectionStatus.INJECTING);
     setTimeout(() => {
       setInjectionStatus(InjectionStatus.INJECTED);
-      setTimeout(() => setInjectionStatus(InjectionStatus.HOOKED), 1000);
     }, 1500);
   };
 
-  const handleReplay = (pkt: Packet) => {
-    if (injectionStatus !== InjectionStatus.HOOKED) return;
-    setReplayingId(pkt.id);
+  const toggleGlobalHooks = () => {
+    if (injectionStatus !== InjectionStatus.INJECTED && injectionStatus !== InjectionStatus.HOOKED) return;
     
-    // Simulate network delay for replay
+    if (!globalHooksEnabled) {
+      setInjectionStatus(InjectionStatus.HOOKED);
+      setGlobalHooksEnabled(true);
+    } else {
+      setGlobalHooksEnabled(false);
+      setIsCapturing(false);
+      // We keep status as HOOKED (but inactive) or revert to INJECTED
+      setInjectionStatus(InjectionStatus.INJECTED);
+    }
+  };
+
+  const toggleSpecificHook = (hook: HookType) => {
+    setHookSettings(prev => ({ ...prev, [hook]: !prev[hook] }));
+  };
+
+  const handleReplay = (pkt: Packet) => {
+    if (!globalHooksEnabled || injectionStatus !== InjectionStatus.HOOKED) return;
+    setReplayingId(pkt.id);
     setTimeout(() => {
       setReplayingId(null);
     }, 600);
@@ -155,11 +222,12 @@ const App: React.FC = () => {
     setPackets(prev => prev.map(p => {
       if (p.id !== id) return p;
       const originalData = p.originalData || p.data;
+      const formatted = formatHexInput(newData);
       return { 
         ...p, 
-        data: newData.toUpperCase().trim(), 
+        data: formatted, 
         originalData, 
-        length: newData.split(' ').filter(x => x).length 
+        length: formatted.split(' ').filter(x => x).length 
       };
     }));
     setActiveTab('HEX');
@@ -170,11 +238,6 @@ const App: React.FC = () => {
       if (p.id !== id || !p.originalData) return p;
       return { ...p, data: p.originalData, originalData: undefined, length: p.originalData.split(' ').length };
     }));
-  };
-
-  // Rule Handlers
-  const formatHexInput = (val: string) => {
-    return val.toUpperCase().replace(/[^0-9A-F]/g, '').replace(/(.{2})/g, '$1 ').trim();
   };
 
   const handleRegisterRule = () => {
@@ -190,7 +253,8 @@ const App: React.FC = () => {
         name: newRuleName,
         match: formattedMatch,
         replace: formattedReplace,
-        action: newRuleAction
+        action: newRuleAction,
+        hook: newRuleHook
       } : r));
       setEditingRuleId(null);
     } else {
@@ -201,7 +265,8 @@ const App: React.FC = () => {
         replace: formattedReplace,
         action: newRuleAction,
         active: true,
-        hits: 0
+        hits: 0,
+        hook: newRuleHook
       };
       setTamperRules(prev => [...prev, newRule]);
     }
@@ -210,6 +275,7 @@ const App: React.FC = () => {
     setNewRuleMatch('');
     setNewRuleReplace('');
     setNewRuleAction('REPLACE');
+    setNewRuleHook('ALL');
   };
 
   const startEditRule = (rule: TamperRule) => {
@@ -218,6 +284,7 @@ const App: React.FC = () => {
     setNewRuleMatch(rule.match);
     setNewRuleReplace(rule.replace);
     setNewRuleAction(rule.action);
+    setNewRuleHook(rule.hook);
   };
 
   const cancelEditRule = () => {
@@ -226,38 +293,50 @@ const App: React.FC = () => {
     setNewRuleMatch('');
     setNewRuleReplace('');
     setNewRuleAction('REPLACE');
+    setNewRuleHook('ALL');
   };
 
   const toggleCapture = () => {
-    if (injectionStatus !== InjectionStatus.HOOKED) return;
+    if (!globalHooksEnabled || injectionStatus !== InjectionStatus.HOOKED) return;
     setIsCapturing(!isCapturing);
     if (!isCapturing && packets.length === 0) {
-      // When starting capture, simulate processing packets through active rules
-      const simulatedPackets = MOCK_PACKETS.map(p => {
-        let pkt = { ...p } as ExtendedPacket;
-        const activeRules = tamperRules.filter(r => r.active);
-        
-        for (const rule of activeRules) {
-          const matchNormalized = rule.match.replace(/\s/g, '').toLowerCase();
-          const dataNormalized = pkt.data.replace(/\s/g, '').toLowerCase();
+      const hitUpdates: Record<string, number> = {};
+
+      const simulatedPackets = MOCK_PACKETS
+        .filter(p => hookSettings[p.sourceHook as HookType] !== false)
+        .map(p => {
+          let pkt = { ...p } as ExtendedPacket;
+          const activeRules = tamperRules.filter(r => r.active);
           
-          if (dataNormalized.includes(matchNormalized)) {
-            rule.hits++;
-            if (rule.action === 'BLOCK') {
-              pkt.isBlocked = true;
-              break; // If blocked, stop further processing
-            } else if (rule.action === 'REPLACE') {
-              pkt.originalData = pkt.data;
-              const replaceNormalized = rule.replace.replace(/\s/g, '').toUpperCase();
-              const matchUpper = rule.match.replace(/\s/g, '').toUpperCase();
-              const newData = pkt.data.replace(/\s/g, '').toUpperCase().replace(matchUpper, replaceNormalized);
-              pkt.data = newData.match(/.{1,2}/g)?.join(' ') || pkt.data;
-              pkt.length = pkt.data.split(' ').length;
+          for (const rule of activeRules) {
+            if (rule.hook !== 'ALL' && rule.hook !== pkt.sourceHook) continue;
+            const matchRegex = hexToRegexSpaced(rule.match);
+            if (!matchRegex) continue;
+            
+            if (matchRegex.test(pkt.data)) {
+              hitUpdates[rule.id] = (hitUpdates[rule.id] || 0) + 1;
+              if (rule.action === 'BLOCK') {
+                pkt.isBlocked = true;
+                break;
+              } else if (rule.action === 'REPLACE') {
+                pkt.originalData = pkt.data;
+                const matchResult = pkt.data.match(matchRegex);
+                if (matchResult) {
+                  const matchedSubstr = matchResult[0];
+                  pkt.data = pkt.data.replace(matchedSubstr, rule.replace);
+                  pkt.length = pkt.data.split(' ').length;
+                }
+              }
             }
           }
-        }
-        return pkt;
-      });
+          return pkt;
+        });
+
+      setTamperRules(prev => prev.map(r => ({
+        ...r,
+        hits: r.hits + (hitUpdates[r.id] || 0)
+      })));
+
       setPackets(simulatedPackets);
     }
   };
@@ -314,22 +393,18 @@ const App: React.FC = () => {
 
   const isByteMatchingSearch = useCallback((index: number) => {
     if (!hexSearchTerm || !selectedPacket) return false;
-    const normalizedSearch = hexSearchTerm.replace(/\s/g, '').toLowerCase();
-    if (!normalizedSearch) return false;
+    const data = selectedPacket.data;
+    const regex = hexToRegexSpaced(hexSearchTerm);
+    if (!regex) return false;
     
-    const normalizedData = selectedPacket.data.replace(/\s/g, '').toLowerCase();
-    const searchStartIndices: number[] = [];
-    let pos = normalizedData.indexOf(normalizedSearch);
-    while (pos !== -1) {
-      searchStartIndices.push(pos / 2);
-      pos = normalizedData.indexOf(normalizedSearch, pos + 1);
-    }
-    
-    const searchByteLen = normalizedSearch.length / 2;
-    return searchStartIndices.some(startIdx => 
-      index >= startIdx && index < startIdx + searchByteLen
-    );
-  }, [hexSearchTerm, selectedPacket]);
+    const globalRegex = new RegExp(regex.source, 'gi');
+    const matches = Array.from(data.matchAll(globalRegex));
+    return matches.some(match => {
+        const byteStart = Math.floor(match.index! / 3);
+        const byteLen = Math.ceil(match[0].length / 3);
+        return index >= byteStart && index < byteStart + byteLen;
+    });
+  }, [hexSearchTerm, selectedPacket, hexToRegexSpaced]);
 
   const selectedBytes = useMemo(() => {
     if (!selectedPacket || !selectionRange) return [];
@@ -352,6 +427,10 @@ const App: React.FC = () => {
     return results;
   }, [selectedBytes]);
 
+  const isHookActive = (hook: string) => {
+    return globalHooksEnabled && (hookSettings[hook as HookType] ?? true);
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden select-none bg-slate-950 text-slate-200">
       {/* Header */}
@@ -364,24 +443,42 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${injectionStatus === 'HOOKED' ? 'text-emerald-400' : 'text-slate-500'}`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${injectionStatus === 'HOOKED' ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`} />
-            {injectionStatus === 'HOOKED' ? 'SYSTEM SECURE' : injectionStatus === 'NONE' ? 'READY' : injectionStatus}
+          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${globalHooksEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`} />
+            {globalHooksEnabled ? 'SYSTEM SECURE: HOOKED' : injectionStatus === 'INJECTED' ? 'READY TO HOOK' : 'DLL NOT FOUND'}
           </div>
-          <button 
-            onClick={handleInject} 
-            disabled={!selectedProcess || injectionStatus === 'HOOKED' || injectionStatus === 'INJECTING'} 
-            className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${
-              injectionStatus === 'HOOKED' 
-              ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/30' 
-              : !selectedProcess 
-              ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-              : 'bg-cyan-600 hover:bg-cyan-500 shadow-lg shadow-cyan-900/20 text-white'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            {injectionStatus === 'HOOKED' ? 'INJECTED' : injectionStatus === 'INJECTING' ? 'INJECTING...' : 'INJECT DLL'}
-          </button>
+          
+          <div className="flex gap-2">
+            <button 
+              onClick={handleInject} 
+              disabled={injectionStatus !== InjectionStatus.NONE && injectionStatus !== InjectionStatus.ERROR} 
+              className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${
+                injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED
+                ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-default' 
+                : !selectedProcess 
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                : 'bg-cyan-600 hover:bg-cyan-500 shadow-lg shadow-cyan-900/20 text-white'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              {injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED ? 'DLL INJECTED' : injectionStatus === 'INJECTING' ? 'INJECTING...' : 'INJECT DLL'}
+            </button>
+
+            <button 
+              onClick={toggleGlobalHooks}
+              disabled={injectionStatus === InjectionStatus.NONE || injectionStatus === InjectionStatus.INJECTING}
+              className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 border ${
+                globalHooksEnabled
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/20'
+                : (injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED)
+                ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/20'
+                : 'bg-slate-800 text-slate-600 border-slate-700 cursor-not-allowed'
+              }`}
+            >
+              <Power className={`w-4 h-4 ${globalHooksEnabled ? 'text-emerald-500' : 'text-white'}`} />
+              {globalHooksEnabled ? 'ENGAGED' : 'ACTIVATE HOOKS'}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -389,7 +486,16 @@ const App: React.FC = () => {
         {/* Left Sidebar */}
         <aside className="w-64 bg-slate-900/50 border-r border-slate-800 flex flex-col p-4 gap-6">
           <section>
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Target Process</label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Target Process</label>
+              <button 
+                onClick={handleRefreshProcesses} 
+                className={`p-1 hover:bg-slate-800 rounded transition-all ${isRefreshing ? 'text-cyan-400 animate-spin' : 'text-slate-600'}`}
+                title="Refresh Processes"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
+            </div>
             <div className="relative">
               <button 
                 onClick={() => setShowProcessList(!showProcessList)} 
@@ -404,10 +510,10 @@ const App: React.FC = () => {
               
               {showProcessList && (
                 <div className="absolute top-full left-0 w-full mt-1 bg-slate-900 border border-slate-800 rounded shadow-2xl z-[60] py-1 max-h-60 overflow-y-auto">
-                  {MOCK_PROCESSES.map(proc => (
+                  {processes.map(proc => (
                     <button 
                       key={proc.pid} 
-                      onClick={() => { setSelectedProcess(proc); setShowProcessList(false); setInjectionStatus(InjectionStatus.NONE); }} 
+                      onClick={() => { setSelectedProcess(proc); setShowProcessList(false); setInjectionStatus(InjectionStatus.NONE); setGlobalHooksEnabled(false); }} 
                       className="w-full px-3 py-2 text-left hover:bg-slate-800 flex flex-col gap-0.5"
                     >
                       <span className="text-xs font-bold text-slate-200">{proc.name}</span>
@@ -420,12 +526,29 @@ const App: React.FC = () => {
           </section>
 
           <section>
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Active Hooks</label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">API Hooks</label>
+              <div className="flex items-center gap-1">
+                <span className="text-[8px] font-bold text-slate-600">STATE</span>
+              </div>
+            </div>
             <div className="space-y-1">
-              {['WSAConnect', 'send', 'recv', 'sendto'].map(hook => (
-                <div key={hook} className="flex items-center justify-between text-[11px] font-mono p-1 px-2 rounded bg-slate-950/50 border border-slate-800/50">
-                   <span className="text-slate-300">{hook}</span>
-                   <div className={`w-2 h-2 rounded-full ${injectionStatus === 'HOOKED' ? 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]' : 'bg-slate-800'}`} />
+              {['WSAConnect', 'send', 'recv', 'sendto', 'recvfrom'].map(hook => (
+                <div 
+                  key={hook} 
+                  onClick={() => toggleSpecificHook(hook as HookType)}
+                  className={`flex items-center justify-between text-[11px] font-mono p-1 px-2 rounded border cursor-pointer transition-all ${
+                    hookSettings[hook as HookType] !== false 
+                    ? 'bg-slate-950/50 border-slate-800/50 hover:border-cyan-500/30' 
+                    : 'bg-slate-900 border-slate-800 opacity-40 hover:opacity-60'
+                  }`}
+                >
+                   <span className={hookSettings[hook as HookType] !== false ? 'text-slate-300' : 'text-slate-600'}>{hook}</span>
+                   <div className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                     isHookActive(hook) 
+                     ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' 
+                     : (hookSettings[hook as HookType] === false ? 'bg-rose-900' : 'bg-slate-800')
+                    }`} />
                 </div>
               ))}
             </div>
@@ -444,8 +567,14 @@ const App: React.FC = () => {
                     <input type="checkbox" checked={rule.active} onChange={() => setTamperRules(prev => prev.map(r => r.id === rule.id ? {...r, active: !r.active} : r))} className="accent-cyan-500" />
                   </div>
                   <div className="flex items-center justify-between text-[9px] font-mono text-slate-500">
-                    <span className={rule.active ? 'text-slate-300' : ''}>{rule.hits} HITS</span>
-                    <Settings className="w-3 h-3 cursor-pointer hover:text-white" onClick={() => { setActiveTab('RULES'); startEditRule(rule); }} />
+                    <div className="flex items-center gap-1">
+                      <Anchor className="w-2 h-2 text-cyan-500" />
+                      <span className="uppercase">{rule.hook}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                       <span className={`font-bold transition-all ${rule.hits > 0 ? 'text-cyan-400' : 'text-slate-700'}`}>{rule.hits} Hits</span>
+                       <Settings className="w-3 h-3 cursor-pointer hover:text-white" onClick={() => { setActiveTab('RULES'); startEditRule(rule); }} />
+                    </div>
                   </div>
                 </div>
               ))}
@@ -471,27 +600,45 @@ const App: React.FC = () => {
         <main className="flex-1 flex flex-col overflow-hidden bg-slate-950">
           <div className="h-12 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/30">
             <div className="flex items-center gap-3">
-              <button onClick={toggleCapture} disabled={injectionStatus !== InjectionStatus.HOOKED} className={`p-1.5 rounded transition-all ${isCapturing ? 'text-rose-400 hover:bg-rose-500/10' : 'text-emerald-400 hover:bg-emerald-500/10'} disabled:opacity-20`}>
+              <button 
+                onClick={toggleCapture} 
+                disabled={!globalHooksEnabled} 
+                className={`p-1.5 rounded transition-all ${isCapturing ? 'text-rose-400 hover:bg-rose-500/10' : 'text-emerald-400 hover:bg-emerald-500/10'} disabled:opacity-20`}
+                title={!globalHooksEnabled ? 'Activate hooks first' : (isCapturing ? 'Stop Capture' : 'Start Capture')}
+              >
                 {isCapturing ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
               </button>
               <button onClick={() => setPackets([])} className="p-1.5 text-slate-500 hover:text-white"><Trash2 className="w-5 h-5" /></button>
               <div className="w-px h-6 bg-slate-800 mx-1" />
-              <div className="flex gap-1">
+              <div className="flex gap-1 items-center">
                 {(['ALL', 'TCP', 'UDP'] as const).map(p => (
                   <button key={p} onClick={() => setProtocolFilter(p)} className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${protocolFilter === p ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}>{p}</button>
                 ))}
+              </div>
+              <div className="flex items-center gap-1 border-l border-slate-800 pl-4">
+                <span className="text-[10px] font-bold text-slate-600 uppercase">Filter Hook:</span>
+                <select 
+                  value={hookFilter} 
+                  onChange={(e) => setHookFilter(e.target.value as HookType | 'ALL')}
+                  className="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-[10px] font-bold text-slate-400 focus:border-cyan-500 outline-none hover:border-slate-700 transition-colors"
+                >
+                  <option value="ALL">ALL</option>
+                  {['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv'].map(h => (
+                    <option key={h} value={h}>{h.toUpperCase()}</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-600" />
-                <input type="text" placeholder="Search data..." value={filterText} onChange={e => setFilterText(e.target.value)} className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-32 font-mono" />
+                <input type="text" placeholder="Search hex (e.g. AA?? CC)..." value={filterText} onChange={e => setFilterText(e.target.value)} className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-48 font-mono" />
               </div>
               {selectedPacketId && (
                 <div className="flex gap-2">
                   <button 
                     onClick={() => { const p = packets.find(p => p.id === selectedPacketId); if(p) handleReplay(p); }} 
-                    disabled={injectionStatus !== InjectionStatus.HOOKED || selectedPacket?.isBlocked}
+                    disabled={!globalHooksEnabled || selectedPacket?.isBlocked}
                     className={`p-1.5 rounded border transition-all ${replayingId === selectedPacketId ? 'text-amber-500 bg-amber-500/20 animate-pulse' : 'text-amber-400 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'} disabled:opacity-30`}
                     title="Replay Packet"
                   >
@@ -508,51 +655,48 @@ const App: React.FC = () => {
 
           {/* Packet Table */}
           <div className="flex-1 overflow-auto">
-            <table className="w-full border-collapse text-left font-mono text-xs">
-              <thead className="sticky top-0 bg-slate-900 text-slate-500 uppercase text-[10px] border-b border-slate-800 z-10">
-                <tr>
-                  <th className="px-4 py-2 w-16 text-center">#</th>
-                  <th className="px-4 py-2 w-16 text-center">DIR</th>
-                  <th className="px-4 py-2 w-32">ADDR</th>
-                  <th className="px-4 py-2 w-16 text-right">LEN</th>
-                  <th className="px-4 py-2">HEX DATA STREAM</th>
-                  <th className="px-4 py-2 w-24 text-center">STATUS</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900/50">
-                {filteredPackets.map((pkt, idx) => (
-                  <tr 
-                    key={pkt.id} 
-                    onClick={() => setSelectedPacketId(pkt.id)} 
-                    className={`cursor-pointer transition-all duration-300 ${selectedPacketId === pkt.id ? 'bg-cyan-600/20 text-cyan-100' : 'hover:bg-slate-900/40 text-slate-400'} ${replayingId === pkt.id ? 'bg-amber-500/30' : ''} ${pkt.isBlocked ? 'opacity-40' : ''}`}
-                  >
-                    <td className="px-4 py-1.5 text-center flex items-center justify-center gap-2">
-                      <span className="text-slate-600">{idx + 1}</span>
-                      {pkt.originalData && <span className="text-[8px] bg-purple-500 text-white px-1 rounded font-bold">MOD</span>}
-                    </td>
-                    <td className="px-4 py-1.5 text-center">{pkt.direction === 'IN' ? <span className="text-emerald-500">←</span> : <span className="text-amber-500">→</span>}</td>
-                    <td className="px-4 py-1.5 text-slate-300 truncate max-w-[120px]">{pkt.remoteAddr}</td>
-                    <td className="px-4 py-1.5 text-right font-medium">{pkt.length}</td>
-                    <td className="px-4 py-1.5 opacity-60 truncate max-w-2xl">
-                      {pkt.isBlocked ? <span className="line-through text-rose-500/50">{pkt.data}</span> : pkt.data}
-                    </td>
-                    <td className="px-4 py-1.5 text-center">
-                      {pkt.isBlocked ? (
-                        <span className="bg-rose-500/10 text-rose-500 px-1.5 py-0.5 rounded text-[9px] font-bold border border-rose-500/20">BLOCKED</span>
-                      ) : (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleReplay(pkt); }}
-                          disabled={injectionStatus !== InjectionStatus.HOOKED}
-                          className={`p-1 rounded hover:bg-amber-500/20 transition-all ${replayingId === pkt.id ? 'text-amber-500 animate-spin' : 'text-slate-600 hover:text-amber-400'} disabled:opacity-20`}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </td>
+            {!globalHooksEnabled && !packets.length ? (
+              <div className="h-full flex flex-col items-center justify-center gap-4 text-slate-700">
+                <ZapOff className="w-12 h-12 opacity-20" />
+                <p className="text-xs uppercase font-bold tracking-widest opacity-40">Engage Hooks to monitor socket data</p>
+              </div>
+            ) : (
+              <table className="w-full border-collapse text-left font-mono text-xs">
+                <thead className="sticky top-0 bg-slate-900 text-slate-500 uppercase text-[10px] border-b border-slate-800 z-10">
+                  <tr>
+                    <th className="px-4 py-2 w-16 text-center">#</th>
+                    <th className="px-4 py-2 w-16 text-center">DIR</th>
+                    <th className="px-4 py-2 w-32">ADDR</th>
+                    <th className="px-4 py-2 w-16 text-right">LEN</th>
+                    <th className="px-4 py-2">HEX DATA STREAM</th>
+                    <th className="px-4 py-2 w-24 text-center">HOOK</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-900/50">
+                  {filteredPackets.map((pkt, idx) => (
+                    <tr 
+                      key={pkt.id} 
+                      onClick={() => setSelectedPacketId(pkt.id)} 
+                      className={`cursor-pointer transition-all duration-300 ${selectedPacketId === pkt.id ? 'bg-cyan-600/20 text-cyan-100' : 'hover:bg-slate-900/40 text-slate-400'} ${replayingId === pkt.id ? 'bg-amber-500/30' : ''} ${pkt.isBlocked ? 'opacity-40' : ''}`}
+                    >
+                      <td className="px-4 py-1.5 text-center flex items-center justify-center gap-2">
+                        <span className="text-slate-600">{idx + 1}</span>
+                        {pkt.originalData && <span className="text-[8px] bg-purple-500 text-white px-1 rounded font-bold">MOD</span>}
+                      </td>
+                      <td className="px-4 py-1.5 text-center">{pkt.direction === 'IN' ? <span className="text-emerald-500">←</span> : <span className="text-amber-500">→</span>}</td>
+                      <td className="px-4 py-1.5 text-slate-300 truncate max-w-[120px]">{pkt.remoteAddr}</td>
+                      <td className="px-4 py-1.5 text-right font-medium">{pkt.length}</td>
+                      <td className="px-4 py-1.5 opacity-60 truncate max-w-2xl">
+                        {pkt.isBlocked ? <span className="line-through text-rose-500/50">{pkt.data}</span> : pkt.data}
+                      </td>
+                      <td className="px-4 py-1.5 text-center">
+                        <span className="text-[10px] text-slate-500 font-mono px-1.5 py-0.5 rounded bg-slate-800/50 uppercase border border-slate-700/50">{pkt.sourceHook}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* Inspector Tabs */}
@@ -572,7 +716,7 @@ const App: React.FC = () => {
                 {activeTab === 'HEX' && (
                   <div className="flex items-center gap-2">
                     <SearchCode className="w-3.5 h-3.5" />
-                    <input type="text" placeholder="Find pattern (e.g. 0F 00)..." value={hexSearchTerm} onChange={e => setHexSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-slate-300 w-48" />
+                    <input type="text" placeholder="Find pattern (?? for wildcard)..." value={hexSearchTerm} onChange={e => setHexSearchTerm(e.target.value)} className="bg-transparent border-none outline-none text-slate-300 w-48" />
                   </div>
                 )}
                 {selectedPacket && <span>LEN: <span className="text-cyan-500 font-bold">{selectedPacket.length}</span></span>}
@@ -608,7 +752,7 @@ const App: React.FC = () => {
                                           isSelected 
                                           ? 'bg-cyan-500 text-white scale-105 z-10 shadow-[0_0_8px_rgba(6,182,212,0.5)]' 
                                           : isMatching
-                                          ? 'bg-amber-500/40 text-amber-100 ring-1 ring-amber-500/50'
+                                          ? 'bg-amber-500/40 text-amber-100 ring-1 ring-amber-500/50 shadow-[0_0_5px_rgba(245,158,11,0.5)]'
                                           : isModified 
                                           ? 'bg-purple-500/30 text-purple-200 ring-1 ring-purple-500/50' 
                                           : byteIdx < 8 ? 'bg-slate-900/40' : ''
@@ -675,7 +819,7 @@ const App: React.FC = () => {
                   <div className="flex justify-between items-center">
                     <div className="flex gap-2">
                        <button onClick={() => setEditBuffer(selectedPacket?.data || '')} className="px-3 py-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-300 uppercase">Reset</button>
-                       <button onClick={() => setEditBuffer(prev => prev.replace(/[^0-9a-fA-F]/g, '').match(/.{1,2}/g)?.join(' ') || '')} className="px-3 py-1.5 text-[10px] font-bold text-cyan-500/70 hover:text-cyan-400 uppercase flex items-center gap-1"><Wand2 className="w-3 h-3"/> Format</button>
+                       <button onClick={() => setEditBuffer(prev => formatHexInput(prev))} className="px-3 py-1.5 text-[10px] font-bold text-cyan-500/70 hover:text-cyan-400 uppercase flex items-center gap-1"><Wand2 className="w-3 h-3"/> Format</button>
                     </div>
                     <button onClick={() => handleReplace(selectedPacketId!, editBuffer)} disabled={!selectedPacketId || selectedPacket?.isBlocked} className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded text-xs font-bold shadow-lg shadow-purple-900/20 transition-all disabled:opacity-30">
                       <Save className="w-4 h-4" /> COMMIT TAMPER TO SOCKET
@@ -698,16 +842,17 @@ const App: React.FC = () => {
                                  {rule.name}
                                  {editingRuleId === rule.id && <span className="text-[8px] bg-cyan-500 text-white px-1 rounded">EDITING</span>}
                                </span>
-                               <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500">
+                               <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-slate-500 mt-1">
+                                  <span className="bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 flex items-center gap-1">
+                                    <Anchor className="w-2.5 h-2.5 text-cyan-500" />
+                                    {rule.hook}
+                                  </span>
                                   <span className="bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">M: {rule.match}</span>
                                   {rule.action === 'REPLACE' && (
                                     <>
                                       <ChevronRight className="w-3 h-3" />
                                       <span className="bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-500/30 text-purple-300">R: {rule.replace}</span>
                                     </>
-                                  )}
-                                  {rule.action === 'BLOCK' && (
-                                    <span className="text-rose-500 font-bold ml-2">DROP PACKET</span>
                                   )}
                                </div>
                              </div>
@@ -744,31 +889,46 @@ const App: React.FC = () => {
                             className="bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs focus:border-cyan-500 outline-none transition-colors" 
                           />
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] font-bold text-slate-600">ACTION TYPE</label>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => setNewRuleAction('REPLACE')} 
-                              className={`flex-1 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 border transition-all ${newRuleAction === 'REPLACE' ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
-                            >
-                              <Scissors className="w-3 h-3" /> TAMPER
-                            </button>
-                            <button 
-                              onClick={() => setNewRuleAction('BLOCK')} 
-                              className={`flex-1 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 border transition-all ${newRuleAction === 'BLOCK' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
-                            >
-                              <Ban className="w-3 h-3" /> BLOCK (DROP)
-                            </button>
-                          </div>
-                        </div>
+                        
                         <div className="grid grid-cols-2 gap-4">
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-bold text-slate-600">MATCH HEX PATTERN</label>
+                            <label className="text-[10px] font-bold text-slate-600 uppercase">Apply to HOOK</label>
+                            <select 
+                              value={newRuleHook} 
+                              onChange={(e) => setNewRuleHook(e.target.value as HookType)}
+                              className="bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs focus:border-cyan-500 outline-none transition-colors text-slate-200"
+                            >
+                              <option value="ALL">ALL</option>
+                              {['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv'].map(h => <option key={h} value={h}>{h.toUpperCase()}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-bold text-slate-600">ACTION TYPE</label>
+                            <div className="flex gap-2 h-full">
+                              <button 
+                                onClick={() => setNewRuleAction('REPLACE')} 
+                                className={`flex-1 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 border transition-all ${newRuleAction === 'REPLACE' ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
+                              >
+                                <Scissors className="w-3 h-3" /> TAMPER
+                              </button>
+                              <button 
+                                onClick={() => setNewRuleAction('BLOCK')} 
+                                className={`flex-1 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 border transition-all ${newRuleAction === 'BLOCK' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
+                              >
+                                <Ban className="w-3 h-3" /> BLOCK
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-bold text-slate-600">MATCH HEX PATTERN (?? = Wildcard)</label>
                             <input 
                               type="text" 
                               value={newRuleMatch}
                               onChange={e => setNewRuleMatch(formatHexInput(e.target.value))}
-                              placeholder="FF 01 02" 
+                              placeholder="FF ?? 02" 
                               className="bg-slate-900 border border-slate-800 rounded px-3 py-2 text-[11px] font-mono focus:border-cyan-500 outline-none transition-colors" 
                             />
                           </div>
@@ -800,7 +960,7 @@ const App: React.FC = () => {
                           } disabled:opacity-30 disabled:cursor-not-allowed`}
                         >
                            {editingRuleId ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-                           {editingRuleId ? 'SAVE CHANGES' : 'REGISTER GLOBAL HOOK'}
+                           {editingRuleId ? 'SAVE CHANGES' : 'REGISTER HOOK RULE'}
                         </button>
                       </div>
                    </div>
@@ -813,11 +973,11 @@ const App: React.FC = () => {
 
       <footer className="h-6 bg-slate-950 border-t border-slate-800 flex items-center justify-between px-3 text-[10px] font-medium text-slate-600 uppercase tracking-tight">
         <div className="flex gap-6">
-          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${injectionStatus === 'HOOKED' ? 'bg-emerald-500' : 'bg-slate-800'}`} /> WINSOCK2: <span className="text-slate-400">{injectionStatus === 'HOOKED' ? 'ACTIVE' : 'IDLE'}</span></div>
-          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${isCapturing ? 'bg-purple-500 animate-pulse' : 'bg-slate-800'}`} /> CAPTURE: <span className="text-slate-400">{isCapturing ? 'RUNNING' : 'STOPPED'}</span></div>
+          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-slate-800'}`} /> ENGINE STATUS: <span className="text-slate-400">{globalHooksEnabled ? 'HOOKED' : (injectionStatus === 'INJECTED' ? 'STANDBY' : 'IDLE')}</span></div>
+          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${isCapturing ? 'bg-purple-500 animate-pulse' : 'bg-slate-800'}`} /> TRACE: <span className="text-slate-400">{isCapturing ? 'RECORING' : 'READY'}</span></div>
         </div>
         <div className="flex items-center gap-3">
-          <span>BUFF_SIZE: 1024KB</span>
+          <span>BUFF: 1024KB</span>
           <div className="w-px h-3 bg-slate-800" />
           <span>© 2025 GAMEPROXY PRO - DLL HOOK SYSTEM</span>
         </div>

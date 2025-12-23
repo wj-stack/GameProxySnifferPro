@@ -2,6 +2,8 @@
 export type Protocol = 'TCP' | 'UDP';
 export type Direction = 'IN' | 'OUT';
 
+export type HookType = 'send' | 'recv' | 'sendto' | 'recvfrom' | 'WSASend' | 'WSARecv' | 'ALL';
+
 export interface Packet {
   id: string;
   timestamp: string;
@@ -12,6 +14,7 @@ export interface Packet {
   remotePort: number;
   length: number;
   data: string; // Hex string representation
+  sourceHook?: HookType; // Which hook captured this packet
 }
 
 export interface TargetProcess {
