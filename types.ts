@@ -17,6 +17,12 @@ export interface Packet {
   sourceHook?: HookType; // Which hook captured this packet
 }
 
+export type ExtendedPacket = Packet & { 
+  originalData?: string; 
+  isBlocked?: boolean;
+  appliedRuleName?: string;
+};
+
 export interface TargetProcess {
   pid: number;
   name: string;
@@ -29,4 +35,15 @@ export enum InjectionStatus {
   INJECTED = 'INJECTED',
   HOOKED = 'HOOKED',
   ERROR = 'ERROR'
+}
+
+export interface TamperRule {
+  id: string;
+  name: string;
+  match: string;
+  replace: string;
+  action: 'REPLACE' | 'BLOCK';
+  active: boolean;
+  hits: number;
+  hook: HookType;
 }

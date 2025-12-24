@@ -1,66 +1,15 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
-  Activity, 
-  ShieldCheck, 
-  Settings, 
-  Database, 
-  Play, 
-  Square, 
-  Terminal, 
-  Search, 
-  Filter, 
-  Trash2, 
-  Cpu, 
-  Zap,
-  ChevronDown,
-  ChevronRight,
-  Crosshair,
-  Info,
-  Copy,
-  Hash,
-  Type,
-  Check,
-  RotateCcw,
-  BarChart3,
-  SearchCode,
-  Edit3,
-  Save,
-  Wand2,
-  Plus,
-  ArrowRightLeft,
-  X,
-  History,
-  Send,
-  Ban,
-  Scissors,
-  Anchor,
-  RefreshCw,
-  Power,
-  ToggleLeft as Toggle,
-  ZapOff,
-  GripHorizontal,
-  ChevronsDown,
-  ChevronsUp
+  Activity, ShieldCheck, Settings, Database, Play, Square, Terminal, Search, 
+  Filter, Trash2, Cpu, Zap, ChevronDown, ChevronRight, Crosshair, Info, Copy, 
+  Hash, Type, Check, RotateCcw, BarChart3, SearchCode, Edit3, Save, Wand2, 
+  Plus, ArrowRightLeft, X, History, Send, Ban, Scissors, Anchor, RefreshCw, 
+  Power, ToggleLeft as Toggle, ZapOff, GripHorizontal, ChevronsDown, ChevronsUp
 } from 'lucide-react';
-import { Packet, TargetProcess, InjectionStatus, Protocol, HookType } from './types';
-import { MOCK_PROCESSES, MOCK_PACKETS } from './constants';
-
-interface TamperRule {
-  id: string;
-  name: string;
-  match: string;
-  replace: string;
-  action: 'REPLACE' | 'BLOCK';
-  active: boolean;
-  hits: number;
-  hook: HookType;
-}
-
-type ExtendedPacket = Packet & { 
-  originalData?: string; 
-  isBlocked?: boolean;
-};
+import { Packet, TargetProcess, InjectionStatus, Protocol, HookType, TamperRule } from './types';
+import { useGameProxy } from './useGameProxy';
+import { formatHexInput, hexToRegexSpaced } from './utils';
 
 // Simple Sparkline Component
 const TrafficGraph: React.FC<{ data: number[] }> = ({ data }) => {
@@ -82,49 +31,26 @@ const TrafficGraph: React.FC<{ data: number[] }> = ({ data }) => {
 };
 
 const App: React.FC = () => {
-  const [processes, setProcesses] = useState<TargetProcess[]>(MOCK_PROCESSES);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedProcess, setSelectedProcess] = useState<TargetProcess | null>(null);
-  const [injectionStatus, setInjectionStatus] = useState<InjectionStatus>(InjectionStatus.NONE);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [packets, setPackets] = useState<ExtendedPacket[]>([]);
+  const { state, actions } = useGameProxy();
+  
+  // UI Specific State
   const [selectedPacketId, setSelectedPacketId] = useState<string | null>(null);
-  const [filterText, setFilterText] = useState('');
-  const [hexSearchTerm, setHexSearchTerm] = useState('');
-  const [protocolFilter, setProtocolFilter] = useState<Protocol | 'ALL'>('ALL');
-  const [hookFilter, setHookFilter] = useState<HookType | 'ALL'>('ALL');
   const [showProcessList, setShowProcessList] = useState(false);
   const [hoveredByteIndex, setHoveredByteIndex] = useState<number | null>(null);
-  const [trafficData, setTrafficData] = useState<number[]>(new Array(20).fill(0));
   const [replayingId, setReplayingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'HEX' | 'EDIT' | 'RULES'>('HEX');
+  const [hexSearchTerm, setHexSearchTerm] = useState('');
   
-  // Resizable & Collapsible Panel State
-  const [inspectorHeight, setInspectorHeight] = useState(416); // Default 26rem (~416px)
+  // Layout State
+  const [inspectorHeight, setInspectorHeight] = useState(416);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const preCollapseHeightRef = useRef(416);
 
-  // Hook Activation State
-  const [globalHooksEnabled, setGlobalHooksEnabled] = useState(false);
-  const [hookSettings, setHookSettings] = useState<Record<HookType, boolean>>({
-    'send': true,
-    'recv': true,
-    'sendto': true,
-    'recvfrom': true,
-    'WSASend': true,
-    'WSARecv': true,
-    'ALL': true
-  });
-
-  // Replacement Logic State
+  // Edit Buffer State
   const [editBuffer, setEditBuffer] = useState('');
-  const [tamperRules, setTamperRules] = useState<TamperRule[]>([
-    { id: '1', name: 'Gold Bypass', match: '0F ?? 01', replace: 'FF FF FF', action: 'REPLACE', active: false, hits: 12, hook: 'recv' },
-    { id: '2', name: 'Anti-Cheat Heartbeat Block', match: 'DE AD BE EF', replace: '', action: 'BLOCK', active: true, hits: 8, hook: 'send' }
-  ]);
 
-  // Form states for new/editing rules
+  // Rule Form State
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleMatch, setNewRuleMatch] = useState('');
   const [newRuleReplace, setNewRuleReplace] = useState('');
@@ -132,12 +58,21 @@ const App: React.FC = () => {
   const [newRuleHook, setNewRuleHook] = useState<HookType>('ALL');
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
-  // Selection states
+  // Selection State
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
-  
-  // Resize Handler
+
+  // Helpers
+  const selectedPacket = useMemo(() => 
+    state.packets.find(p => p.id === selectedPacketId), 
+  [state.packets, selectedPacketId]);
+
+  useEffect(() => {
+    if (selectedPacket) setEditBuffer(selectedPacket.data);
+  }, [selectedPacketId, selectedPacket]);
+
+  // Resize Handlers
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
@@ -151,7 +86,6 @@ const App: React.FC = () => {
     if (isResizing) {
       const footerHeight = 24; 
       const newHeight = window.innerHeight - e.clientY - footerHeight;
-      // Min height 40 (header) and Max height 80% of window
       const boundedHeight = Math.max(40, Math.min(newHeight, window.innerHeight * 0.8));
       setInspectorHeight(boundedHeight);
       if (boundedHeight > 40) setIsCollapsed(false);
@@ -165,7 +99,7 @@ const App: React.FC = () => {
       setIsCollapsed(false);
     } else {
       preCollapseHeightRef.current = inspectorHeight;
-      setInspectorHeight(40); // Height of header
+      setInspectorHeight(40);
       setIsCollapsed(true);
     }
   };
@@ -184,115 +118,42 @@ const App: React.FC = () => {
     };
   }, [isResizing, resize, stopResizing]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTrafficData(prev => [...prev.slice(1), Math.floor(Math.random() * 20)]);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleRefreshProcesses = useCallback(() => {
-    setIsRefreshing(true);
-    setTimeout(() => {
-      const shuffled = [...MOCK_PROCESSES].sort(() => Math.random() - 0.5);
-      setProcesses(shuffled);
-      setIsRefreshing(false);
-    }, 800);
-  }, []);
-
-  const formatHexInput = (val: string) => {
-    const cleaned = val.toUpperCase().replace(/[^0-9A-F?]/g, '');
-    const chunks = cleaned.match(/.{1,2}/g) || [];
-    return chunks.join(' ');
+  // Selection Logic
+  const startSelection = (index: number) => {
+    setSelectionStart(index);
+    setSelectionEnd(index);
+    setIsSelecting(true);
   };
 
-  const hexToRegexSpaced = useCallback((pattern: string) => {
-    const cleaned = pattern.toUpperCase().replace(/[^0-9A-F?]/g, '');
-    if (!cleaned) return null;
-    const chunks = cleaned.match(/.{1,2}/g) || [];
-    const regexParts = chunks.map(chunk => chunk.replace(/\?/g, '[0-9A-F]'));
-    const regexStr = regexParts.join('\\s+');
-    try {
-      return new RegExp(regexStr, 'i');
-    } catch (e) {
-      return null;
-    }
-  }, []);
+  const updateSelection = (index: number) => {
+    setHoveredByteIndex(index);
+    if (isSelecting) setSelectionEnd(index);
+  };
 
-  const filteredPackets = useMemo(() => {
-    return packets.filter(p => {
-      const matchesProtocol = protocolFilter === 'ALL' || p.protocol === protocolFilter;
-      const matchesHook = hookFilter === 'ALL' || p.sourceHook === hookFilter;
-      const regex = hexToRegexSpaced(filterText);
-      const matchesSearch = p.remoteAddr.includes(filterText) || 
-                          (regex ? regex.test(p.data) : p.data.toLowerCase().includes(filterText.toLowerCase()));
-      return matchesProtocol && matchesHook && matchesSearch;
-    });
-  }, [packets, protocolFilter, hookFilter, filterText, hexToRegexSpaced]);
-
-  const selectedPacket = useMemo(() => 
-    packets.find(p => p.id === selectedPacketId), 
-  [packets, selectedPacketId]);
+  const endSelection = useCallback(() => setIsSelecting(false), []);
 
   useEffect(() => {
-    if (selectedPacket) setEditBuffer(selectedPacket.data);
-  }, [selectedPacketId]);
+    window.addEventListener('mouseup', endSelection);
+    return () => window.removeEventListener('mouseup', endSelection);
+  }, [endSelection]);
 
-  const handleInject = () => {
-    if (!selectedProcess) return;
-    setInjectionStatus(InjectionStatus.INJECTING);
-    setTimeout(() => {
-      setInjectionStatus(InjectionStatus.INJECTED);
-    }, 1500);
-  };
-
-  const toggleGlobalHooks = () => {
-    if (injectionStatus !== InjectionStatus.INJECTED && injectionStatus !== InjectionStatus.HOOKED) return;
-    
-    if (!globalHooksEnabled) {
-      setInjectionStatus(InjectionStatus.HOOKED);
-      setGlobalHooksEnabled(true);
-    } else {
-      setGlobalHooksEnabled(false);
-      setIsCapturing(false);
-      setInjectionStatus(InjectionStatus.INJECTED);
-    }
-  };
-
-  const toggleSpecificHook = (hook: HookType) => {
-    setHookSettings(prev => ({ ...prev, [hook]: !prev[hook] }));
-  };
-
+  // UI Helper Logic
   const handleReplay = (pkt: Packet) => {
-    if (!globalHooksEnabled || injectionStatus !== InjectionStatus.HOOKED) return;
+    if (!state.globalHooksEnabled || state.injectionStatus !== InjectionStatus.HOOKED) return;
     setReplayingId(pkt.id);
     setTimeout(() => {
       setReplayingId(null);
     }, 600);
   };
 
-  const handleReplace = (id: string, newData: string) => {
-    setPackets(prev => prev.map(p => {
-      if (p.id !== id) return p;
-      const originalData = p.originalData || p.data;
-      const formatted = formatHexInput(newData);
-      return { 
-        ...p, 
-        data: formatted, 
-        originalData, 
-        length: formatted.split(' ').filter(x => x).length 
-      };
-    }));
-    setActiveTab('HEX');
+  const handleCommitTamper = () => {
+    if (selectedPacketId) {
+      actions.updatePacketData(selectedPacketId, editBuffer);
+      setActiveTab('HEX');
+    }
   };
 
-  const restorePacket = (id: string) => {
-    setPackets(prev => prev.map(p => {
-      if (p.id !== id || !p.originalData) return p;
-      return { ...p, data: p.originalData, originalData: undefined, length: p.originalData.split(' ').length };
-    }));
-  };
-
+  // Rule Form Logic
   const handleRegisterRule = () => {
     if (!newRuleName || !newRuleMatch) return;
     if (newRuleAction === 'REPLACE' && !newRuleReplace) return;
@@ -301,14 +162,13 @@ const App: React.FC = () => {
     const formattedReplace = newRuleAction === 'REPLACE' ? formatHexInput(newRuleReplace) : '';
 
     if (editingRuleId) {
-      setTamperRules(prev => prev.map(r => r.id === editingRuleId ? {
-        ...r,
+      actions.updateRule(editingRuleId, {
         name: newRuleName,
         match: formattedMatch,
         replace: formattedReplace,
         action: newRuleAction,
         hook: newRuleHook
-      } : r));
+      });
       setEditingRuleId(null);
     } else {
       const newRule: TamperRule = {
@@ -321,7 +181,7 @@ const App: React.FC = () => {
         hits: 0,
         hook: newRuleHook
       };
-      setTamperRules(prev => [...prev, newRule]);
+      actions.addRule(newRule);
     }
     
     setNewRuleName('');
@@ -349,51 +209,7 @@ const App: React.FC = () => {
     setNewRuleHook('ALL');
   };
 
-  const toggleCapture = () => {
-    if (!globalHooksEnabled || injectionStatus !== InjectionStatus.HOOKED) return;
-    setIsCapturing(!isCapturing);
-    if (!isCapturing && packets.length === 0) {
-      const hitUpdates: Record<string, number> = {};
-
-      const simulatedPackets = MOCK_PACKETS
-        .filter(p => hookSettings[p.sourceHook as HookType] !== false)
-        .map(p => {
-          let pkt = { ...p } as ExtendedPacket;
-          const activeRules = tamperRules.filter(r => r.active);
-          
-          for (const rule of activeRules) {
-            if (rule.hook !== 'ALL' && rule.hook !== pkt.sourceHook) continue;
-            const matchRegex = hexToRegexSpaced(rule.match);
-            if (!matchRegex) continue;
-            
-            if (matchRegex.test(pkt.data)) {
-              hitUpdates[rule.id] = (hitUpdates[rule.id] || 0) + 1;
-              if (rule.action === 'BLOCK') {
-                pkt.isBlocked = true;
-                break;
-              } else if (rule.action === 'REPLACE') {
-                pkt.originalData = pkt.data;
-                const matchResult = pkt.data.match(matchRegex);
-                if (matchResult) {
-                  const matchedSubstr = matchResult[0];
-                  pkt.data = pkt.data.replace(matchedSubstr, rule.replace);
-                  pkt.length = pkt.data.split(' ').length;
-                }
-              }
-            }
-          }
-          return pkt;
-        });
-
-      setTamperRules(prev => prev.map(r => ({
-        ...r,
-        hits: r.hits + (hitUpdates[r.id] || 0)
-      })));
-
-      setPackets(simulatedPackets);
-    }
-  };
-
+  // Derived Hex View Logic
   const hexLines = useMemo(() => {
     if (!selectedPacket) return [];
     const bytes = selectedPacket.data.split(' ');
@@ -402,23 +218,15 @@ const App: React.FC = () => {
     return lines;
   }, [selectedPacket]);
 
-  const startSelection = (index: number) => {
-    setSelectionStart(index);
-    setSelectionEnd(index);
-    setIsSelecting(true);
-  };
+  const selectionRange = useMemo(() => {
+    if (selectionStart === null || selectionEnd === null) return null;
+    return { start: Math.min(selectionStart, selectionEnd), end: Math.max(selectionStart, selectionEnd) };
+  }, [selectionStart, selectionEnd]);
 
-  const updateSelection = (index: number) => {
-    setHoveredByteIndex(index);
-    if (isSelecting) setSelectionEnd(index);
-  };
-
-  const endSelection = useCallback(() => setIsSelecting(false), []);
-
-  useEffect(() => {
-    window.addEventListener('mouseup', endSelection);
-    return () => window.removeEventListener('mouseup', endSelection);
-  }, [endSelection]);
+  const isByteSelected = useCallback((index: number) => {
+    if (!selectionRange) return false;
+    return index >= selectionRange.start && index <= selectionRange.end;
+  }, [selectionRange]);
 
   const isByteModified = (index: number) => {
     if (!selectedPacket || !selectedPacket.originalData) return false;
@@ -434,16 +242,6 @@ const App: React.FC = () => {
     return val ? val.toUpperCase() : null;
   };
 
-  const selectionRange = useMemo(() => {
-    if (selectionStart === null || selectionEnd === null) return null;
-    return { start: Math.min(selectionStart, selectionEnd), end: Math.max(selectionStart, selectionEnd) };
-  }, [selectionStart, selectionEnd]);
-
-  const isByteSelected = useCallback((index: number) => {
-    if (!selectionRange) return false;
-    return index >= selectionRange.start && index <= selectionRange.end;
-  }, [selectionRange]);
-
   const isByteMatchingSearch = useCallback((index: number) => {
     if (!hexSearchTerm || !selectedPacket) return false;
     const data = selectedPacket.data;
@@ -457,7 +255,7 @@ const App: React.FC = () => {
         const byteLen = Math.ceil(match[0].length / 3);
         return index >= byteStart && index < byteStart + byteLen;
     });
-  }, [hexSearchTerm, selectedPacket, hexToRegexSpaced]);
+  }, [hexSearchTerm, selectedPacket]);
 
   const selectedBytes = useMemo(() => {
     if (!selectedPacket || !selectionRange) return [];
@@ -481,7 +279,7 @@ const App: React.FC = () => {
   }, [selectedBytes]);
 
   const isHookActive = (hook: string) => {
-    return globalHooksEnabled && (hookSettings[hook as HookType] ?? true);
+    return state.globalHooksEnabled && (state.hookSettings[hook as HookType] ?? true);
   };
 
   return (
@@ -496,40 +294,40 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${globalHooksEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`} />
-            {globalHooksEnabled ? 'SYSTEM SECURE: HOOKED' : injectionStatus === 'INJECTED' ? 'READY TO HOOK' : 'DLL NOT FOUND'}
+          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${state.globalHooksEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${state.globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`} />
+            {state.globalHooksEnabled ? 'SYSTEM SECURE: HOOKED' : state.injectionStatus === 'INJECTED' ? 'READY TO HOOK' : 'DLL NOT FOUND'}
           </div>
           
           <div className="flex gap-2">
             <button 
-              onClick={handleInject} 
-              disabled={injectionStatus !== InjectionStatus.NONE && injectionStatus !== InjectionStatus.ERROR} 
+              onClick={actions.injectDll} 
+              disabled={state.injectionStatus !== InjectionStatus.NONE && state.injectionStatus !== InjectionStatus.ERROR} 
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${
-                injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED
+                state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED
                 ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-default' 
-                : !selectedProcess 
+                : !state.selectedProcess 
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 : 'bg-cyan-600 hover:bg-cyan-500 shadow-lg shadow-cyan-900/20 text-white'
               }`}
             >
               <ShieldCheck className="w-4 h-4" />
-              {injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED ? 'DLL INJECTED' : injectionStatus === 'INJECTING' ? 'INJECTING...' : 'INJECT DLL'}
+              {state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED ? 'DLL INJECTED' : state.injectionStatus === 'INJECTING' ? 'INJECTING...' : 'INJECT DLL'}
             </button>
 
             <button 
-              onClick={toggleGlobalHooks}
-              disabled={injectionStatus === InjectionStatus.NONE || injectionStatus === InjectionStatus.INJECTING}
+              onClick={actions.toggleGlobalHooks}
+              disabled={state.injectionStatus === InjectionStatus.NONE || state.injectionStatus === InjectionStatus.INJECTING}
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 border ${
-                globalHooksEnabled
+                state.globalHooksEnabled
                 ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/20'
-                : (injectionStatus === InjectionStatus.INJECTED || injectionStatus === InjectionStatus.HOOKED)
+                : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED)
                 ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/20'
                 : 'bg-slate-800 text-slate-600 border-slate-700 cursor-not-allowed'
               }`}
             >
-              <Power className={`w-4 h-4 ${globalHooksEnabled ? 'text-emerald-500' : 'text-white'}`} />
-              {globalHooksEnabled ? 'ENGAGED' : 'ACTIVATE HOOKS'}
+              <Power className={`w-4 h-4 ${state.globalHooksEnabled ? 'text-emerald-500' : 'text-white'}`} />
+              {state.globalHooksEnabled ? 'ENGAGED' : 'ACTIVATE HOOKS'}
             </button>
           </div>
         </div>
@@ -542,8 +340,8 @@ const App: React.FC = () => {
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Target Process</label>
               <button 
-                onClick={handleRefreshProcesses} 
-                className={`p-1 hover:bg-slate-800 rounded transition-all ${isRefreshing ? 'text-cyan-400 animate-spin' : 'text-slate-600'}`}
+                onClick={actions.refreshProcesses} 
+                className={`p-1 hover:bg-slate-800 rounded transition-all ${state.isRefreshing ? 'text-cyan-400 animate-spin' : 'text-slate-600'}`}
                 title="Refresh Processes"
               >
                 <RefreshCw className="w-3 h-3" />
@@ -552,21 +350,21 @@ const App: React.FC = () => {
             <div className="relative">
               <button 
                 onClick={() => setShowProcessList(!showProcessList)} 
-                className={`w-full bg-slate-950 border p-2.5 rounded flex items-center justify-between text-xs transition-colors ${selectedProcess ? 'border-cyan-500/50 text-slate-200' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
+                className={`w-full bg-slate-950 border p-2.5 rounded flex items-center justify-between text-xs transition-colors ${state.selectedProcess ? 'border-cyan-500/50 text-slate-200' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
               >
                 <div className="flex items-center gap-2 truncate">
-                  <Crosshair className={`w-3.5 h-3.5 ${selectedProcess ? 'text-cyan-400' : 'text-slate-600'}`} />
-                  <span className="truncate">{selectedProcess ? selectedProcess.name : 'Select Process...'}</span>
+                  <Crosshair className={`w-3.5 h-3.5 ${state.selectedProcess ? 'text-cyan-400' : 'text-slate-600'}`} />
+                  <span className="truncate">{state.selectedProcess ? state.selectedProcess.name : 'Select Process...'}</span>
                 </div>
                 <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showProcessList ? 'rotate-180' : ''}`} />
               </button>
               
               {showProcessList && (
                 <div className="absolute top-full left-0 w-full mt-1 bg-slate-900 border border-slate-800 rounded shadow-2xl z-[60] py-1 max-h-60 overflow-y-auto">
-                  {processes.map(proc => (
+                  {state.processes.map(proc => (
                     <button 
                       key={proc.pid} 
-                      onClick={() => { setSelectedProcess(proc); setShowProcessList(false); setInjectionStatus(InjectionStatus.NONE); setGlobalHooksEnabled(false); }} 
+                      onClick={() => { actions.selectProcess(proc); setShowProcessList(false); }} 
                       className="w-full px-3 py-2 text-left hover:bg-slate-800 flex flex-col gap-0.5"
                     >
                       <span className="text-xs font-bold text-slate-200">{proc.name}</span>
@@ -589,18 +387,18 @@ const App: React.FC = () => {
               {['WSAConnect', 'send', 'recv', 'sendto', 'recvfrom'].map(hook => (
                 <div 
                   key={hook} 
-                  onClick={() => toggleSpecificHook(hook as HookType)}
+                  onClick={() => actions.toggleSpecificHook(hook as HookType)}
                   className={`flex items-center justify-between text-[11px] font-mono p-1 px-2 rounded border cursor-pointer transition-all ${
-                    hookSettings[hook as HookType] !== false 
+                    state.hookSettings[hook as HookType] !== false 
                     ? 'bg-slate-950/50 border-slate-800/50 hover:border-cyan-500/30' 
                     : 'bg-slate-900 border-slate-800 opacity-40 hover:opacity-60'
                   }`}
                 >
-                   <span className={hookSettings[hook as HookType] !== false ? 'text-slate-300' : 'text-slate-600'}>{hook}</span>
+                   <span className={state.hookSettings[hook as HookType] !== false ? 'text-slate-300' : 'text-slate-600'}>{hook}</span>
                    <div className={`w-2 h-2 rounded-full transition-all duration-300 ${
                      isHookActive(hook) 
                      ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' 
-                     : (hookSettings[hook as HookType] === false ? 'bg-rose-900' : 'bg-slate-800')
+                     : (state.hookSettings[hook as HookType] === false ? 'bg-rose-900' : 'bg-slate-800')
                     }`} />
                 </div>
               ))}
@@ -610,14 +408,14 @@ const App: React.FC = () => {
           <section>
             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Tamper Rules</label>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
-              {tamperRules.map(rule => (
+              {state.tamperRules.map(rule => (
                 <div key={rule.id} className={`p-2 rounded border transition-all ${rule.active ? (rule.action === 'BLOCK' ? 'bg-rose-500/10 border-rose-500/50' : 'bg-purple-500/10 border-purple-500/50') : 'bg-slate-950 border-slate-800 opacity-60'}`}>
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-1.5 truncate">
                       {rule.action === 'BLOCK' ? <Ban className="w-2.5 h-2.5 text-rose-500" /> : <Scissors className="w-2.5 h-2.5 text-purple-500" />}
                       <span className="text-[10px] font-bold truncate">{rule.name}</span>
                     </div>
-                    <input type="checkbox" checked={rule.active} onChange={() => setTamperRules(prev => prev.map(r => r.id === rule.id ? {...r, active: !r.active} : r))} className="accent-cyan-500" />
+                    <input type="checkbox" checked={rule.active} onChange={() => actions.updateRule(rule.id, { active: !rule.active })} className="accent-cyan-500" />
                   </div>
                   <div className="flex items-center justify-between text-[9px] font-mono text-slate-500">
                     <div className="flex items-center gap-1">
@@ -640,11 +438,11 @@ const App: React.FC = () => {
           <section className="flex-1 flex flex-col justify-end">
             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Load Graph</label>
             <div className="bg-slate-950 border border-slate-800 rounded p-2 mb-4">
-              <TrafficGraph data={trafficData} />
+              <TrafficGraph data={state.trafficData} />
             </div>
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2 font-mono">
-               <div className="flex justify-between items-end"><span className="text-[10px] text-slate-500">TOTAL</span><span className="text-xs text-cyan-400 font-bold">{packets.length}</span></div>
-               <div className="flex justify-between items-end"><span className="text-[10px] text-slate-500">BLOCKED</span><span className="text-xs text-rose-500 font-bold">{packets.filter(p => p.isBlocked).length}</span></div>
+               <div className="flex justify-between items-end"><span className="text-[10px] text-slate-500">TOTAL</span><span className="text-xs text-cyan-400 font-bold">{state.packets.length}</span></div>
+               <div className="flex justify-between items-end"><span className="text-[10px] text-slate-500">BLOCKED</span><span className="text-xs text-rose-500 font-bold">{state.packets.filter(p => p.isBlocked).length}</span></div>
             </div>
           </section>
         </aside>
@@ -654,25 +452,25 @@ const App: React.FC = () => {
           <div className="h-12 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/30">
             <div className="flex items-center gap-3">
               <button 
-                onClick={toggleCapture} 
-                disabled={!globalHooksEnabled} 
-                className={`p-1.5 rounded transition-all ${isCapturing ? 'text-rose-400 hover:bg-rose-500/10' : 'text-emerald-400 hover:bg-emerald-500/10'} disabled:opacity-20`}
-                title={!globalHooksEnabled ? 'Activate hooks first' : (isCapturing ? 'Stop Capture' : 'Start Capture')}
+                onClick={actions.toggleCapture} 
+                disabled={!state.globalHooksEnabled} 
+                className={`p-1.5 rounded transition-all ${state.isCapturing ? 'text-rose-400 hover:bg-rose-500/10' : 'text-emerald-400 hover:bg-emerald-500/10'} disabled:opacity-20`}
+                title={!state.globalHooksEnabled ? 'Activate hooks first' : (state.isCapturing ? 'Stop Capture' : 'Start Capture')}
               >
-                {isCapturing ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+                {state.isCapturing ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
               </button>
-              <button onClick={() => setPackets([])} className="p-1.5 text-slate-500 hover:text-white"><Trash2 className="w-5 h-5" /></button>
+              <button onClick={actions.clearPackets} className="p-1.5 text-slate-500 hover:text-white"><Trash2 className="w-5 h-5" /></button>
               <div className="w-px h-6 bg-slate-800 mx-1" />
               <div className="flex gap-1 items-center">
                 {(['ALL', 'TCP', 'UDP'] as const).map(p => (
-                  <button key={p} onClick={() => setProtocolFilter(p)} className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${protocolFilter === p ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}>{p}</button>
+                  <button key={p} onClick={() => actions.setProtocolFilter(p)} className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${state.filters.protocol === p ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}>{p}</button>
                 ))}
               </div>
               <div className="flex items-center gap-1 border-l border-slate-800 pl-4">
                 <span className="text-[10px] font-bold text-slate-600 uppercase">Filter Hook:</span>
                 <select 
-                  value={hookFilter} 
-                  onChange={(e) => setHookFilter(e.target.value as HookType | 'ALL')}
+                  value={state.filters.hook} 
+                  onChange={(e) => actions.setHookFilter(e.target.value as HookType | 'ALL')}
                   className="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-[10px] font-bold text-slate-400 focus:border-cyan-500 outline-none hover:border-slate-700 transition-colors"
                 >
                   <option value="ALL">ALL</option>
@@ -685,13 +483,13 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-600" />
-                <input type="text" placeholder="Search hex..." value={filterText} onChange={e => setFilterText(e.target.value)} className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-48 font-mono" />
+                <input type="text" placeholder="Search hex..." value={state.filters.text} onChange={e => actions.setFilterText(e.target.value)} className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-48 font-mono" />
               </div>
               {selectedPacketId && (
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => { const p = packets.find(p => p.id === selectedPacketId); if(p) handleReplay(p); }} 
-                    disabled={!globalHooksEnabled || selectedPacket?.isBlocked}
+                    onClick={() => { const p = state.packets.find(p => p.id === selectedPacketId); if(p) handleReplay(p); }} 
+                    disabled={!state.globalHooksEnabled || selectedPacket?.isBlocked}
                     className={`p-1.5 rounded border transition-all ${replayingId === selectedPacketId ? 'text-amber-500 bg-amber-500/20 animate-pulse' : 'text-amber-400 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'} disabled:opacity-30`}
                     title="Replay Packet"
                   >
@@ -699,7 +497,7 @@ const App: React.FC = () => {
                   </button>
                   <button onClick={() => { setActiveTab('EDIT'); if(isCollapsed) toggleCollapse(); }} disabled={selectedPacket?.isBlocked} className="p-1.5 text-purple-400 bg-purple-500/10 rounded border border-purple-500/20 hover:bg-purple-500/20 disabled:opacity-30"><Edit3 className="w-4 h-4" /></button>
                   {selectedPacket?.originalData && (
-                    <button onClick={() => restorePacket(selectedPacketId)} className="p-1.5 text-amber-400 bg-amber-500/10 rounded border border-amber-500/20 hover:bg-amber-500/20" title="Restore Original"><History className="w-4 h-4" /></button>
+                    <button onClick={() => actions.restorePacket(selectedPacketId)} className="p-1.5 text-amber-400 bg-amber-500/10 rounded border border-amber-500/20 hover:bg-amber-500/20" title="Restore Original"><History className="w-4 h-4" /></button>
                   )}
                 </div>
               )}
@@ -708,7 +506,7 @@ const App: React.FC = () => {
 
           {/* Packet Table */}
           <div className="flex-1 overflow-auto">
-            {!globalHooksEnabled && !packets.length ? (
+            {!state.globalHooksEnabled && !state.packets.length ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 text-slate-700">
                 <ZapOff className="w-12 h-12 opacity-20" />
                 <p className="text-xs uppercase font-bold tracking-widest opacity-40">Engage Hooks to monitor socket data</p>
@@ -726,21 +524,24 @@ const App: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-900/50">
-                  {filteredPackets.map((pkt, idx) => (
+                  {state.filteredPackets.map((pkt, idx) => (
                     <tr 
                       key={pkt.id} 
                       onClick={() => setSelectedPacketId(pkt.id)} 
-                      className={`cursor-pointer transition-all duration-300 ${selectedPacketId === pkt.id ? 'bg-cyan-600/20 text-cyan-100' : 'hover:bg-slate-900/40 text-slate-400'} ${replayingId === pkt.id ? 'bg-amber-500/30' : ''} ${pkt.isBlocked ? 'opacity-40' : ''}`}
+                      className={`cursor-pointer transition-all duration-300 ${selectedPacketId === pkt.id ? 'bg-cyan-600/20 text-cyan-100' : 'hover:bg-slate-900/40 text-slate-400'} ${replayingId === pkt.id ? 'bg-amber-500/30' : ''}`}
                     >
                       <td className="px-4 py-1.5 text-center flex items-center justify-center gap-2">
                         <span className="text-slate-600">{idx + 1}</span>
-                        {pkt.originalData && <span className="text-[8px] bg-purple-500 text-white px-1 rounded font-bold">MOD</span>}
                       </td>
                       <td className="px-4 py-1.5 text-center">{pkt.direction === 'IN' ? <span className="text-emerald-500">←</span> : <span className="text-amber-500">→</span>}</td>
                       <td className="px-4 py-1.5 text-slate-300 truncate max-w-[120px]">{pkt.remoteAddr}</td>
                       <td className="px-4 py-1.5 text-right font-medium">{pkt.length}</td>
-                      <td className="px-4 py-1.5 opacity-60 truncate max-w-2xl font-mono">
-                        {pkt.isBlocked ? <span className="line-through text-rose-500/50">{pkt.data}</span> : pkt.data}
+                      <td className="px-4 py-1.5 truncate max-w-2xl font-mono flex items-center gap-2">
+                        {pkt.isBlocked && <span className="text-[9px] px-1 rounded bg-rose-500 text-white font-bold whitespace-nowrap">🚫 {pkt.appliedRuleName}</span>}
+                        {!pkt.isBlocked && pkt.originalData && <span className="text-[9px] px-1 rounded bg-purple-500 text-white font-bold whitespace-nowrap">✂️ {pkt.appliedRuleName}</span>}
+                        <span className={pkt.isBlocked ? "text-rose-400 decoration-rose-500 line-through" : "text-slate-400"}>
+                          {pkt.data}
+                        </span>
                       </td>
                       <td className="px-4 py-1.5 text-center">
                         <span className="text-[10px] text-slate-500 font-mono px-1.5 py-0.5 rounded bg-slate-800/50 uppercase border border-slate-700/50">{pkt.sourceHook}</span>
@@ -908,7 +709,7 @@ const App: React.FC = () => {
                          <button onClick={() => setEditBuffer(selectedPacket?.data || '')} className="px-3 py-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-300 uppercase">Reset</button>
                          <button onClick={() => setEditBuffer(prev => formatHexInput(prev))} className="px-3 py-1.5 text-[10px] font-bold text-cyan-500/70 hover:text-cyan-400 uppercase flex items-center gap-1"><Wand2 className="w-3 h-3"/> Format</button>
                       </div>
-                      <button onClick={() => handleReplace(selectedPacketId!, editBuffer)} disabled={!selectedPacketId || selectedPacket?.isBlocked} className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded text-xs font-bold shadow-lg shadow-purple-900/20 transition-all disabled:opacity-30">
+                      <button onClick={handleCommitTamper} disabled={!selectedPacketId || selectedPacket?.isBlocked} className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded text-xs font-bold shadow-lg shadow-purple-900/20 transition-all disabled:opacity-30">
                         <Save className="w-4 h-4" /> COMMIT TAMPER TO SOCKET
                       </button>
                     </div>
@@ -918,10 +719,10 @@ const App: React.FC = () => {
                      <div className="flex flex-col gap-4">
                        <div className="flex items-center justify-between">
                          <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><ArrowRightLeft className="w-4 h-4" /> Configured Rules</h3>
-                         <span className="text-[10px] text-slate-600 uppercase font-mono">{tamperRules.length} Registered</span>
+                         <span className="text-[10px] text-slate-600 uppercase font-mono">{state.tamperRules.length} Registered</span>
                        </div>
                        <div className="space-y-2 max-h-[220px] overflow-y-auto scrollbar-thin pr-2">
-                          {tamperRules.map(rule => (
+                          {state.tamperRules.map(rule => (
                             <div key={rule.id} className={`p-4 rounded-lg border flex items-center justify-between group transition-all ${rule.active ? (rule.action === 'BLOCK' ? 'bg-rose-500/10 border-rose-500/30' : 'bg-purple-500/10 border-purple-500/30') : 'bg-slate-900/50 border-slate-800'}`}>
                                <div className="flex flex-col gap-1 flex-1 cursor-pointer" onClick={() => startEditRule(rule)}>
                                  <span className="text-xs font-bold text-slate-100 flex items-center gap-2">
@@ -946,7 +747,7 @@ const App: React.FC = () => {
                                <div className="flex items-center gap-4">
                                  <div className="text-[10px] font-bold text-slate-600">{rule.hits} HITS</div>
                                  <button 
-                                  onClick={(e) => { e.stopPropagation(); setTamperRules(prev => prev.filter(r => r.id !== rule.id)); if(editingRuleId === rule.id) cancelEditRule(); }} 
+                                  onClick={(e) => { e.stopPropagation(); actions.deleteRule(rule.id); if(editingRuleId === rule.id) cancelEditRule(); }} 
                                   className="text-slate-700 hover:text-rose-500 transition-colors p-1"
                                  >
                                    <X className="w-4 h-4" />
@@ -1061,8 +862,8 @@ const App: React.FC = () => {
 
       <footer className="h-6 bg-slate-950 border-t border-slate-800 flex items-center justify-between px-3 text-[10px] font-medium text-slate-600 uppercase tracking-tight">
         <div className="flex gap-6">
-          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-slate-800'}`} /> ENGINE STATUS: <span className="text-slate-400">{globalHooksEnabled ? 'HOOKED' : (injectionStatus === 'INJECTED' ? 'STANDBY' : 'IDLE')}</span></div>
-          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${isCapturing ? 'bg-purple-500 animate-pulse' : 'bg-slate-800'}`} /> TRACE: <span className="text-slate-400">{isCapturing ? 'RECORING' : 'READY'}</span></div>
+          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${state.globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-slate-800'}`} /> ENGINE STATUS: <span className="text-slate-400">{state.globalHooksEnabled ? 'HOOKED' : (state.injectionStatus === 'INJECTED' ? 'STANDBY' : 'IDLE')}</span></div>
+          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${state.isCapturing ? 'bg-purple-500 animate-pulse' : 'bg-slate-800'}`} /> TRACE: <span className="text-slate-400">{state.isCapturing ? 'RECORING' : 'READY'}</span></div>
         </div>
         <div className="flex items-center gap-3">
           <span>BUFF: 1024KB</span>
