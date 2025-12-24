@@ -11,6 +11,59 @@ import { Packet, TargetProcess, InjectionStatus, Protocol, HookType, TamperRule 
 import { useGameProxy } from './useGameProxy';
 import { formatHexInput, hexToRegexSpaced } from './utils';
 
+// Reusable Custom Select Component
+interface CustomSelectProps {
+  value: string;
+  onChange: (val: string) => void;
+  options: string[];
+  className?: string; // Wrapper classes
+  buttonClass?: string; // Button trigger classes
+}
+
+const CustomSelect: React.FC<CustomSelectProps> = ({ value, onChange, options, className = "", buttonClass = "" }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`flex items-center justify-between transition-all outline-none ${buttonClass} ${isOpen ? 'border-cyan-500 text-cyan-400 ring-1 ring-cyan-500/20' : ''}`}
+      >
+        <span className="truncate uppercase mr-2">{value}</span>
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOpen ? 'rotate-180 text-cyan-500' : 'text-slate-500'}`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-1 w-full min-w-[140px] bg-slate-900 border border-slate-700 rounded-md shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top">
+            <div className="py-1 max-h-60 overflow-y-auto scrollbar-thin">
+            {options.map((opt) => (
+                <button
+                    key={opt}
+                    onClick={() => { onChange(opt); setIsOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-[10px] font-bold hover:bg-slate-800 transition-colors flex items-center justify-between group ${value === opt ? 'text-cyan-400 bg-cyan-950/20' : 'text-slate-400'}`}
+                >
+                    <span className="uppercase">{opt}</span>
+                    {value === opt && <Check className="w-3 h-3 text-cyan-500" />}
+                </button>
+            ))}
+            </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Simple Sparkline Component
 const TrafficGraph: React.FC<{ data: number[] }> = ({ data }) => {
   const max = Math.max(...data, 10);
@@ -466,18 +519,15 @@ const App: React.FC = () => {
                   <button key={p} onClick={() => actions.setProtocolFilter(p)} className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${state.filters.protocol === p ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}>{p}</button>
                 ))}
               </div>
-              <div className="flex items-center gap-1 border-l border-slate-800 pl-4">
+              <div className="flex items-center gap-2 border-l border-slate-800 pl-4">
                 <span className="text-[10px] font-bold text-slate-600 uppercase">Filter Hook:</span>
-                <select 
+                <CustomSelect 
                   value={state.filters.hook} 
-                  onChange={(e) => actions.setHookFilter(e.target.value as HookType | 'ALL')}
-                  className="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-[10px] font-bold text-slate-400 focus:border-cyan-500 outline-none hover:border-slate-700 transition-colors"
-                >
-                  <option value="ALL">ALL</option>
-                  {['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv'].map(h => (
-                    <option key={h} value={h}>{h.toUpperCase()}</option>
-                  ))}
-                </select>
+                  onChange={(val) => actions.setHookFilter(val as HookType | 'ALL')}
+                  options={['ALL', 'send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv']}
+                  className="w-32"
+                  buttonClass="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-[10px] font-bold text-slate-400 hover:border-slate-700 w-full"
+                />
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -781,14 +831,13 @@ const App: React.FC = () => {
                           <div className="grid grid-cols-2 gap-4">
                             <div className="flex flex-col gap-1.5">
                               <label className="text-[10px] font-bold text-slate-600 uppercase">Apply to HOOK</label>
-                              <select 
+                              <CustomSelect 
                                 value={newRuleHook} 
-                                onChange={(e) => setNewRuleHook(e.target.value as HookType)}
-                                className="bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs focus:border-cyan-500 outline-none transition-colors text-slate-200"
-                              >
-                                <option value="ALL">ALL</option>
-                                {['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv'].map(h => <option key={h} value={h}>{h.toUpperCase()}</option>)}
-                              </select>
+                                onChange={(val) => setNewRuleHook(val as HookType)}
+                                options={['ALL', 'send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv']}
+                                className="w-full"
+                                buttonClass="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 hover:border-slate-700"
+                              />
                             </div>
                             <div className="flex flex-col gap-1.5">
                               <label className="text-[10px] font-bold text-slate-600">ACTION TYPE</label>
