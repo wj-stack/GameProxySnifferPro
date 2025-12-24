@@ -149,8 +149,8 @@ const App: React.FC = () => {
 
   const resize = useCallback((e: MouseEvent) => {
     if (isResizing) {
-    const footerHeight = 24; 
-    const newHeight = window.innerHeight - e.clientY - footerHeight;
+      const footerHeight = 24; 
+      const newHeight = window.innerHeight - e.clientY - footerHeight;
       // Min height 40 (header) and Max height 80% of window
       const boundedHeight = Math.max(40, Math.min(newHeight, window.innerHeight * 0.8));
       setInspectorHeight(boundedHeight);
