@@ -89,6 +89,7 @@ const App: React.FC = () => {
   // UI Specific State
   const [selectedPacketId, setSelectedPacketId] = useState<string | null>(null);
   const [showProcessList, setShowProcessList] = useState(false);
+  const [processSearchTerm, setProcessSearchTerm] = useState('');
   const [hoveredByteIndex, setHoveredByteIndex] = useState<number | null>(null);
   const [replayingId, setReplayingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'HEX' | 'EDIT' | 'RULES'>('HEX');
@@ -120,6 +121,16 @@ const App: React.FC = () => {
   const selectedPacket = useMemo(() => 
     state.packets.find(p => p.id === selectedPacketId), 
   [state.packets, selectedPacketId]);
+
+  // Filtered processes based on search term
+  const filteredProcesses = useMemo(() => {
+    if (!processSearchTerm.trim()) return state.processes;
+    const searchLower = processSearchTerm.toLowerCase().trim();
+    return state.processes.filter(proc => 
+      proc.name.toLowerCase().includes(searchLower) || 
+      proc.pid.toString().includes(searchLower)
+    );
+  }, [state.processes, processSearchTerm]);
 
   useEffect(() => {
     if (selectedPacket) setEditBuffer(selectedPacket.data);
@@ -408,7 +419,10 @@ const App: React.FC = () => {
             </div>
             <div className="relative">
               <button 
-                onClick={() => setShowProcessList(!showProcessList)} 
+                onClick={() => { 
+                  setShowProcessList(!showProcessList); 
+                  if (!showProcessList) setProcessSearchTerm(''); 
+                }} 
                 className={`w-full bg-slate-950 border p-2.5 rounded flex items-center justify-between text-xs transition-colors ${state.selectedProcess ? 'border-cyan-500/50 text-slate-200' : 'border-slate-800 text-slate-500 hover:border-slate-700'}`}
               >
                 <div className="flex items-center gap-2 truncate">
@@ -419,17 +433,41 @@ const App: React.FC = () => {
               </button>
               
               {showProcessList && (
-                <div className="absolute top-full left-0 w-full mt-1 bg-slate-900 border border-slate-800 rounded shadow-2xl z-[60] py-1 max-h-60 overflow-y-auto">
-                  {state.processes.map(proc => (
-                    <button 
-                      key={proc.pid} 
-                      onClick={() => { actions.selectProcess(proc); setShowProcessList(false); }} 
-                      className="w-full px-3 py-2 text-left hover:bg-slate-800 flex flex-col gap-0.5"
-                    >
-                      <span className="text-xs font-bold text-slate-200">{proc.name}</span>
-                      <span className="text-[10px] font-mono text-slate-500">PID: {proc.pid}</span>
-                    </button>
-                  ))}
+                <div className="absolute top-full left-0 w-full mt-1 bg-slate-900 border border-slate-800 rounded shadow-2xl z-[60] overflow-hidden">
+                  {/* Search Input */}
+                  <div className="p-2 border-b border-slate-800">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-600" />
+                      <input 
+                        type="text" 
+                        placeholder="搜索进程名称或PID..." 
+                        value={processSearchTerm}
+                        onChange={e => setProcessSearchTerm(e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        className="w-full bg-slate-950 border border-slate-800 rounded py-1.5 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none font-mono"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  {/* Process List */}
+                  <div className="max-h-60 overflow-y-auto py-1 scrollbar-thin">
+                    {filteredProcesses.length > 0 ? (
+                      filteredProcesses.map(proc => (
+                        <button 
+                          key={proc.pid} 
+                          onClick={() => { actions.selectProcess(proc); setShowProcessList(false); setProcessSearchTerm(''); }} 
+                          className="w-full px-3 py-2 text-left hover:bg-slate-800 flex flex-col gap-0.5 transition-colors"
+                        >
+                          <span className="text-xs font-bold text-slate-200">{proc.name}</span>
+                          <span className="text-[10px] font-mono text-slate-500">PID: {proc.pid}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-4 text-center text-xs text-slate-600">
+                        未找到匹配的进程
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
