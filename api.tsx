@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { TamperRule } from './types';
+import { TamperRule, TargetProcess } from './types';
 import { listen } from '@tauri-apps/api/event';
 export { listen };
 
@@ -27,6 +27,19 @@ export const captureApi = {
    */
   getStatus: async (): Promise<'capturing' | 'idle'> => {
     return await invoke('get_capture_status');
+  },
+};
+
+/**
+ * Process API - 进程管理 API
+ */
+export const processApi = {
+  /**
+   * 获取进程列表
+   * @returns 进程列表
+   */
+  getProcesses: async (): Promise<TargetProcess[]> => {
+    return await invoke('get_processes');
   },
 };
 

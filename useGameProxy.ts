@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { TargetProcess, InjectionStatus, HookType, ExtendedPacket, TamperRule, Protocol } from './types';
 import { MOCK_PROCESSES, MOCK_PACKETS } from './constants';
 import { formatHexInput, hexToRegexSpaced } from './utils';
-import { captureApi, listen, tamperRuleApi } from './api';
+import { captureApi, listen, tamperRuleApi, processApi } from './api';
 
 export const useGameProxy = () => {
   // Domain State
@@ -250,15 +250,25 @@ export const useGameProxy = () => {
   // }, [isCapturing, globalHooksEnabled, injectionStatus]);
 
 
-  // Process Logic
-  const refreshProcesses = useCallback(() => {
+  // Process Logic - 使用真实的 API
+  const refreshProcesses = useCallback(async () => {
     setIsRefreshing(true);
-    setTimeout(() => {
-      const shuffled = [...MOCK_PROCESSES].sort(() => Math.random() - 0.5);
-      setProcesses(shuffled);
+    try {
+      const processList = await processApi.getProcesses();
+      setProcesses(processList);
+    } catch (error) {
+      console.error('获取进程列表失败:', error);
+      // 如果 API 调用失败，使用模拟数据作为后备
+      setProcesses(MOCK_PROCESSES);
+    } finally {
       setIsRefreshing(false);
-    }, 800);
+    }
   }, []);
+
+  // 组件加载时获取进程列表
+  useEffect(() => {
+    refreshProcesses();
+  }, [refreshProcesses]);
 
   const selectProcess = useCallback((proc: TargetProcess) => {
     setSelectedProcess(proc);
