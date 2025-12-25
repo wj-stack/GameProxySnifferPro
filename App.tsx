@@ -108,7 +108,7 @@ const App: React.FC = () => {
   const [newRuleMatch, setNewRuleMatch] = useState('');
   const [newRuleReplace, setNewRuleReplace] = useState('');
   const [newRuleAction, setNewRuleAction] = useState<'REPLACE' | 'BLOCK'>('REPLACE');
-  const [newRuleHook, setNewRuleHook] = useState<HookType>('ALL');
+  const [newRuleHook, setNewRuleHook] = useState<HookType>('send');
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   // Selection State
@@ -221,6 +221,9 @@ const App: React.FC = () => {
         replace: formattedReplace,
         action: newRuleAction,
         hook: newRuleHook
+      }).catch(err => {
+        console.error('更新规则失败:', err);
+        alert('更新规则失败，请重试');
       });
       setEditingRuleId(null);
     } else {
@@ -234,7 +237,10 @@ const App: React.FC = () => {
         hits: 0,
         hook: newRuleHook
       };
-      actions.addRule(newRule);
+      actions.addRule(newRule).catch(err => {
+        console.error('添加规则失败:', err);
+        alert('添加规则失败，请重试');
+      });
     }
     
     setNewRuleName('');
@@ -437,7 +443,7 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="space-y-1">
-              {['WSAConnect', 'send', 'recv', 'sendto', 'recvfrom'].map(hook => (
+              {['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv'].map(hook => (
                 <div 
                   key={hook} 
                   onClick={() => actions.toggleSpecificHook(hook as HookType)}
@@ -468,7 +474,7 @@ const App: React.FC = () => {
                       {rule.action === 'BLOCK' ? <Ban className="w-2.5 h-2.5 text-rose-500" /> : <Scissors className="w-2.5 h-2.5 text-purple-500" />}
                       <span className="text-[10px] font-bold truncate">{rule.name}</span>
                     </div>
-                    <input type="checkbox" checked={rule.active} onChange={() => actions.updateRule(rule.id, { active: !rule.active })} className="accent-cyan-500" />
+                    <input type="checkbox" checked={rule.active} onChange={() => actions.toggleRuleActive(rule.id, !rule.active).catch(err => console.error('切换规则状态失败:', err))} className="accent-cyan-500" />
                   </div>
                   <div className="flex items-center justify-between text-[9px] font-mono text-slate-500">
                     <div className="flex items-center gap-1">
@@ -512,7 +518,7 @@ const App: React.FC = () => {
               >
                 {state.isCapturing ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
               </button>
-              <button onClick={actions.clearPackets} className="p-1.5 text-slate-500 hover:text-white"><Trash2 className="w-5 h-5" /></button>
+              <button onClick={() => actions.clearPackets().catch(err => console.error('清空数据包失败:', err))} className="p-1.5 text-slate-500 hover:text-white"><Trash2 className="w-5 h-5" /></button>
               <div className="w-px h-6 bg-slate-800 mx-1" />
               <div className="flex gap-1 items-center">
                 {(['ALL', 'TCP', 'UDP'] as const).map(p => (
@@ -797,7 +803,14 @@ const App: React.FC = () => {
                                <div className="flex items-center gap-4">
                                  <div className="text-[10px] font-bold text-slate-600">{rule.hits} HITS</div>
                                  <button 
-                                  onClick={(e) => { e.stopPropagation(); actions.deleteRule(rule.id); if(editingRuleId === rule.id) cancelEditRule(); }} 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    actions.deleteRule(rule.id).catch(err => {
+                                      console.error('删除规则失败:', err);
+                                      alert('删除规则失败，请重试');
+                                    }); 
+                                    if(editingRuleId === rule.id) cancelEditRule(); 
+                                  }} 
                                   className="text-slate-700 hover:text-rose-500 transition-colors p-1"
                                  >
                                    <X className="w-4 h-4" />
@@ -834,7 +847,7 @@ const App: React.FC = () => {
                               <CustomSelect 
                                 value={newRuleHook} 
                                 onChange={(val) => setNewRuleHook(val as HookType)}
-                                options={['ALL', 'send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv']}
+                                options={['send', 'recv', 'sendto', 'recvfrom', 'WSASend', 'WSARecv']}
                                 className="w-full"
                                 buttonClass="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 hover:border-slate-700"
                               />
