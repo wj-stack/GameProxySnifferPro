@@ -364,9 +364,9 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${state.globalHooksEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${state.globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`} />
-            {state.globalHooksEnabled ? 'SYSTEM SECURE: HOOKED' : state.injectionStatus === 'INJECTED' ? 'READY TO HOOK' : 'DLL NOT FOUND'}
+          <div className={`px-3 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs font-mono flex gap-2 items-center ${state.globalHooksEnabled ? 'text-emerald-400' : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED) ? 'text-cyan-400' : 'text-slate-500'}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${state.globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED) ? 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]' : 'bg-slate-700'}`} />
+            {state.globalHooksEnabled ? 'SYSTEM SECURE: HOOKED' : state.injectionStatus === InjectionStatus.INJECTING ? 'INJECTING DLL...' : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED) ? 'DLL INJECTED' : 'DLL NOT FOUND'}
           </div>
           
           <div className="flex gap-2">
@@ -382,22 +382,7 @@ const App: React.FC = () => {
               }`}
             >
               <ShieldCheck className="w-4 h-4" />
-              {state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED ? 'DLL INJECTED' : state.injectionStatus === 'INJECTING' ? 'INJECTING...' : 'INJECT DLL'}
-            </button>
-
-            <button 
-              onClick={actions.toggleGlobalHooks}
-              disabled={state.injectionStatus === InjectionStatus.NONE || state.injectionStatus === InjectionStatus.INJECTING}
-              className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-2 border ${
-                state.globalHooksEnabled
-                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/20'
-                : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED)
-                ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/20'
-                : 'bg-slate-800 text-slate-600 border-slate-700 cursor-not-allowed'
-              }`}
-            >
-              <Power className={`w-4 h-4 ${state.globalHooksEnabled ? 'text-emerald-500' : 'text-white'}`} />
-              {state.globalHooksEnabled ? 'ENGAGED' : 'ACTIVATE HOOKS'}
+              {state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED ? (state.globalHooksEnabled ? 'DLL INJECTED & HOOKED' : 'DLL INJECTED') : state.injectionStatus === InjectionStatus.INJECTING ? 'INJECTING...' : 'INJECT DLL'}
             </button>
           </div>
         </div>
@@ -550,9 +535,9 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
               <button 
                 onClick={actions.toggleCapture} 
-                disabled={!state.globalHooksEnabled} 
+                disabled={state.injectionStatus !== InjectionStatus.INJECTED && state.injectionStatus !== InjectionStatus.HOOKED} 
                 className={`p-1.5 rounded transition-all ${state.isCapturing ? 'text-rose-400 hover:bg-rose-500/10' : 'text-emerald-400 hover:bg-emerald-500/10'} disabled:opacity-20`}
-                title={!state.globalHooksEnabled ? 'Activate hooks first' : (state.isCapturing ? 'Stop Capture' : 'Start Capture')}
+                title={(state.injectionStatus !== InjectionStatus.INJECTED && state.injectionStatus !== InjectionStatus.HOOKED) ? '等待 DLL 注入' : (state.isCapturing ? 'Stop Capture' : 'Start Capture')}
               >
                 {state.isCapturing ? <Square className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
               </button>
@@ -600,10 +585,10 @@ const App: React.FC = () => {
 
           {/* Packet Table */}
           <div className="flex-1 overflow-auto">
-            {!state.globalHooksEnabled && !state.packets.length ? (
+            {(state.injectionStatus !== InjectionStatus.INJECTED && state.injectionStatus !== InjectionStatus.HOOKED) && !state.packets.length ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 text-slate-700">
                 <ZapOff className="w-12 h-12 opacity-20" />
-                <p className="text-xs uppercase font-bold tracking-widest opacity-40">Engage Hooks to monitor socket data</p>
+                <p className="text-xs uppercase font-bold tracking-widest opacity-40">注入 DLL 后可以开始抓包</p>
               </div>
             ) : (
               <table className="w-full border-collapse text-left font-mono text-xs">
@@ -962,7 +947,22 @@ const App: React.FC = () => {
 
       <footer className="h-6 bg-slate-950 border-t border-slate-800 flex items-center justify-between px-3 text-[10px] font-medium text-slate-600 uppercase tracking-tight">
         <div className="flex gap-6">
-          <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${state.globalHooksEnabled ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-slate-800'}`} /> ENGINE STATUS: <span className="text-slate-400">{state.globalHooksEnabled ? 'HOOKED' : (state.injectionStatus === 'INJECTED' ? 'STANDBY' : 'IDLE')}</span></div>
+          <div className="flex items-center gap-1.5">
+            <div className={`w-1.5 h-1.5 rounded-full ${
+              state.globalHooksEnabled 
+                ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' 
+                : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED)
+                  ? 'bg-cyan-500 shadow-[0_0_5px_#06b6d4]' 
+                  : 'bg-slate-800'
+            }`} /> 
+            ENGINE STATUS: <span className="text-slate-400">{
+              state.globalHooksEnabled 
+                ? 'HOOKED' 
+                : (state.injectionStatus === InjectionStatus.INJECTED || state.injectionStatus === InjectionStatus.HOOKED)
+                  ? 'STANDBY' 
+                  : 'IDLE'
+            }</span>
+          </div>
           <div className="flex items-center gap-1.5"><div className={`w-1.5 h-1.5 rounded-full ${state.isCapturing ? 'bg-purple-500 animate-pulse' : 'bg-slate-800'}`} /> TRACE: <span className="text-slate-400">{state.isCapturing ? 'RECORING' : 'READY'}</span></div>
         </div>
         <div className="flex items-center gap-3">

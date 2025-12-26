@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { TargetProcess, InjectionStatus, HookType, ExtendedPacket, TamperRule, Protocol } from './types';
 import { MOCK_PROCESSES, MOCK_PACKETS } from './constants';
 import { formatHexInput, hexToRegexSpaced } from './utils';
-import { captureApi, listen, tamperRuleApi, processApi } from './api';
+import { captureApi, listen, tamperRuleApi, processApi, hookApi } from './api';
 
 export const useGameProxy = () => {
   // Domain State
@@ -278,32 +278,94 @@ export const useGameProxy = () => {
     setPackets([]);
   }, []);
 
-  // Injection Logic
-  const injectDll = useCallback(() => {
-    if (!selectedProcess) return;
+  // 辅助函数：根据 hookSettings 激活/停用 hooks
+  const applyHookSettings = useCallback(async (enable: boolean) => {
+    const hookPromises: Promise<void>[] = [];
+    
+    // 根据 hookSettings 启用/禁用各个 hook
+    if (hookSettings.send !== false) {
+      hookPromises.push(hookApi.send(enable));
+    }
+    if (hookSettings.recv !== false) {
+      hookPromises.push(hookApi.recv(enable));
+    }
+    if (hookSettings.sendto !== false) {
+      hookPromises.push(hookApi.sendto(enable));
+    }
+    if (hookSettings.recvfrom !== false) {
+      hookPromises.push(hookApi.recvfrom(enable));
+    }
+    if (hookSettings.WSASend !== false) {
+      hookPromises.push(hookApi.wsasend(enable));
+    }
+    if (hookSettings.WSARecv !== false) {
+      hookPromises.push(hookApi.wsarecv(enable));
+    }
+    
+    // 等待所有 hook 操作完成
+    await Promise.all(hookPromises);
+  }, [hookSettings]);
+
+  // Injection Logic - 真实实现
+  const injectDll = useCallback(async () => {
+    if (!selectedProcess) {
+      console.error('未选择进程');
+      return;
+    }
+    
     setInjectionStatus(InjectionStatus.INJECTING);
-    setTimeout(() => {
+    
+    try {
+      const result = await processApi.injectDll(selectedProcess.pid);
+      console.log('DLL 注入成功:', result);
       setInjectionStatus(InjectionStatus.INJECTED);
-    }, 1500);
+    } catch (error) {
+      console.error('DLL 注入失败:', error);
+      setInjectionStatus(InjectionStatus.ERROR);
+      // 3 秒后自动重置错误状态
+      setTimeout(() => {
+        setInjectionStatus(InjectionStatus.NONE);
+      }, 3000);
+    }
   }, [selectedProcess]);
 
-  // Hook Logic
-  const toggleGlobalHooks = useCallback(() => {
-    if (injectionStatus !== InjectionStatus.INJECTED && injectionStatus !== InjectionStatus.HOOKED) return;
+  // 切换特定 Hook - 如果 hooks 已激活，需要实时更新后端状态
+  const toggleSpecificHook = useCallback(async (hook: HookType) => {
+    const newValue = !hookSettings[hook];
+    setHookSettings(prev => ({ ...prev, [hook]: newValue }));
     
-    if (!globalHooksEnabled) {
-      setInjectionStatus(InjectionStatus.HOOKED);
-      setGlobalHooksEnabled(true);
-    } else {
-      setGlobalHooksEnabled(false);
-      setIsCapturing(false);
-      setInjectionStatus(InjectionStatus.INJECTED);
+    // 如果 hooks 已激活，需要实时更新后端状态
+    if (globalHooksEnabled && hook !== 'ALL') {
+      try {
+        // 根据 hook 类型调用对应的 API
+        switch (hook) {
+          case 'send':
+            await hookApi.send(newValue);
+            break;
+          case 'recv':
+            await hookApi.recv(newValue);
+            break;
+          case 'sendto':
+            await hookApi.sendto(newValue);
+            break;
+          case 'recvfrom':
+            await hookApi.recvfrom(newValue);
+            break;
+          case 'WSASend':
+            await hookApi.wsasend(newValue);
+            break;
+          case 'WSARecv':
+            await hookApi.wsarecv(newValue);
+            break;
+        }
+        console.log(`[Hook] ${hook} ${newValue ? '已启用' : '已禁用'}`);
+      } catch (error) {
+        console.error(`[Hook] 切换 ${hook} 状态失败:`, error);
+        // 如果更新失败，恢复之前的状态
+        setHookSettings(prev => ({ ...prev, [hook]: !newValue }));
+      }
     }
-  }, [injectionStatus, globalHooksEnabled]);
-
-  const toggleSpecificHook = useCallback((hook: HookType) => {
-    setHookSettings(prev => ({ ...prev, [hook]: !prev[hook] }));
-  }, []);
+  }, [hookSettings, globalHooksEnabled]);
 
   // Rule Logic - 使用真实的 API
   const addRule = useCallback(async (rule: TamperRule) => {
@@ -368,25 +430,36 @@ export const useGameProxy = () => {
 
   // Capture Toggle - 真实实现
   const toggleCapture = useCallback(async () => {
-    if (!globalHooksEnabled || injectionStatus !== InjectionStatus.HOOKED) return;
+    // 只有在注入成功（INJECTED 或 HOOKED）状态下才能开始/停止抓包
+    if (injectionStatus !== InjectionStatus.INJECTED && injectionStatus !== InjectionStatus.HOOKED) return;
     
     const newCapturingState = !isCapturing;
     
     try {
       if (newCapturingState) {
-        // 开始抓包
+        // 开始抓包：根据当前激活的hook列表，重新发送激活
+        console.log('[Capture] 开始捕获，激活 hooks...');
+        await applyHookSettings(true);
         await captureApi.start();
         setIsCapturing(true);
+        setGlobalHooksEnabled(true);
+        setInjectionStatus(InjectionStatus.HOOKED);
+        console.log('[Capture] 捕获已开始');
       } else {
-        // 停止抓包
+        // 停止抓包：根据当前的hook发送关闭
+        console.log('[Capture] 停止捕获，停用 hooks...');
         await captureApi.stop();
+        await applyHookSettings(false);
         setIsCapturing(false);
+        setGlobalHooksEnabled(false);
+        setInjectionStatus(InjectionStatus.INJECTED);
+        console.log('[Capture] 捕获已停止');
       }
     } catch (error) {
       console.error('切换抓包状态失败:', error);
       // 如果 API 调用失败，保持当前状态不变
     }
-  }, [globalHooksEnabled, injectionStatus, isCapturing]);
+  }, [injectionStatus, isCapturing, applyHookSettings]);
 
   // Clear Packets and Reset Hits
   const clearPackets = useCallback(async () => {
@@ -459,7 +532,6 @@ export const useGameProxy = () => {
       refreshProcesses,
       selectProcess,
       injectDll,
-      toggleGlobalHooks,
       toggleSpecificHook,
       toggleCapture,
       clearPackets,

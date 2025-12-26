@@ -41,6 +41,15 @@ export const processApi = {
   getProcesses: async (): Promise<TargetProcess[]> => {
     return await invoke('get_processes');
   },
+
+  /**
+   * 注入 DLL 到指定进程
+   * @param processId 目标进程 ID
+   * @returns 注入结果消息
+   */
+  injectDll: async (processId: number): Promise<string> => {
+    return await invoke('inject_dll', { processId });
+  },
 };
 
 /**
