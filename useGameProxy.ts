@@ -19,6 +19,7 @@ export const useGameProxy = () => {
   const [filterText, setFilterText] = useState('');
   const [protocolFilter, setProtocolFilter] = useState<Protocol | 'ALL'>('ALL');
   const [hookFilter, setHookFilter] = useState<HookType | 'ALL'>('ALL');
+  const [socketFilter, setSocketFilter] = useState<string>('');
 
   // Hook Config
   const [globalHooksEnabled, setGlobalHooksEnabled] = useState(false);
@@ -506,9 +507,25 @@ export const useGameProxy = () => {
       const regex = hexToRegexSpaced(filterText);
       const matchesSearch = p.remoteAddr.includes(filterText) || 
                           (regex ? regex.test(p.data) : p.data.toLowerCase().includes(filterText.toLowerCase()));
-      return matchesProtocol && matchesHook && matchesSearch;
+      
+      // Socket filter - 支持十六进制或十进制
+      let matchesSocket = true;
+      if (socketFilter.trim()) {
+        const filterLower = socketFilter.trim().toLowerCase();
+        if (p.socket !== undefined) {
+          // 尝试匹配十六进制
+          const socketHex = p.socket.toString(16).toLowerCase();
+          // 尝试匹配十进制
+          const socketDec = p.socket.toString();
+          matchesSocket = socketHex.includes(filterLower) || socketDec.includes(filterLower);
+        } else {
+          matchesSocket = false; // 如果没有 socket 信息，不匹配
+        }
+      }
+      
+      return matchesProtocol && matchesHook && matchesSearch && matchesSocket;
     });
-  }, [packets, protocolFilter, hookFilter, filterText]);
+  }, [packets, protocolFilter, hookFilter, filterText, socketFilter]);
 
   return {
     state: {
@@ -526,7 +543,8 @@ export const useGameProxy = () => {
       filters: {
         text: filterText,
         protocol: protocolFilter,
-        hook: hookFilter
+        hook: hookFilter,
+        socket: socketFilter
       }
     },
     actions: {
@@ -544,7 +562,8 @@ export const useGameProxy = () => {
       toggleRuleActive,
       setFilterText,
       setProtocolFilter,
-      setHookFilter
+      setHookFilter,
+      setSocketFilter
     }
   };
 };

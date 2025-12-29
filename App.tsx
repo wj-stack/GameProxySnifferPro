@@ -604,6 +604,16 @@ const App: React.FC = () => {
                 <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-600" />
                 <input type="text" placeholder="Search hex..." value={state.filters.text} onChange={e => actions.setFilterText(e.target.value)} className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-48 font-mono" />
               </div>
+              <div className="relative">
+                <Hash className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-600" />
+                <input 
+                  type="text" 
+                  placeholder="Filter socket (hex/dec)..." 
+                  value={state.filters.socket || ''} 
+                  onChange={e => actions.setSocketFilter(e.target.value)} 
+                  className="bg-slate-950 border border-slate-800 rounded py-1 pl-7 pr-3 text-xs focus:border-cyan-500 outline-none w-40 font-mono" 
+                />
+              </div>
               {selectedPacketId && (
                 <div className="flex gap-2">
                   <button 
