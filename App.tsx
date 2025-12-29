@@ -640,6 +640,7 @@ const App: React.FC = () => {
                     <th className="px-4 py-2 w-16 text-center">#</th>
                     <th className="px-4 py-2 w-16 text-center">DIR</th>
                     <th className="px-4 py-2 w-32">ADDR</th>
+                    <th className="px-4 py-2 w-20 text-right">SOCKET</th>
                     <th className="px-4 py-2 w-16 text-right">LEN</th>
                     <th className="px-4 py-2">HEX DATA STREAM (Click row for full data)</th>
                     <th className="px-4 py-2 w-24 text-center">HOOK</th>
@@ -657,6 +658,13 @@ const App: React.FC = () => {
                       </td>
                       <td className="px-4 py-1.5 text-center">{pkt.direction === 'IN' ? <span className="text-emerald-500">←</span> : <span className="text-amber-500">→</span>}</td>
                       <td className="px-4 py-1.5 text-slate-300 truncate max-w-[120px]">{pkt.remoteAddr}</td>
+                      <td className="px-4 py-1.5 text-right font-mono text-slate-400">
+                        {pkt.socket !== undefined ? (
+                          <span className="text-cyan-400">{pkt.socket.toString(16).toUpperCase()}</span>
+                        ) : (
+                          <span className="text-slate-700">-</span>
+                        )}
+                      </td>
                       <td className="px-4 py-1.5 text-right font-medium">{pkt.length}</td>
                       <td className="px-4 py-1.5 truncate max-w-2xl font-mono flex items-center gap-2">
                         {pkt.isBlocked && <span className="text-[9px] px-1 rounded bg-rose-500 text-white font-bold whitespace-nowrap">🚫 {pkt.appliedRuleName}</span>}
