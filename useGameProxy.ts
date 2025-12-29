@@ -93,6 +93,7 @@ export const useGameProxy = () => {
             length: backendPacket.size,
             data: packetDataHex,
             sourceHook: (backendPacket.packetFunction || 'send').toLowerCase() as HookType,
+            socket: backendPacket.socket ? Number(backendPacket.socket) : undefined,
           };
 
           // 应用规则

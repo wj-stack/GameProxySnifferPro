@@ -21,6 +21,7 @@ export type ExtendedPacket = Packet & {
   originalData?: string; 
   isBlocked?: boolean;
   appliedRuleName?: string;
+  socket?: number; // Socket 句柄，用于重放
 };
 
 export interface TargetProcess {

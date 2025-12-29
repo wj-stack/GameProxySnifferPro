@@ -99,6 +99,27 @@ export const hookApi = {
   wsarecv: async (enable: boolean): Promise<void> => {
     await invoke('hook_wsarecv', { enable });
   },
+
+  /**
+   * 重放数据包
+   * @param hookType Hook 类型
+   * @param socket Socket 句柄
+   * @param data 十六进制字符串数据（空格分隔）
+   * @param dstAddr 目标地址（可选，sendto 需要）
+   */
+  replayPacket: async (
+    hookType: string,
+    socket: number,
+    data: string,
+    dstAddr?: string
+  ): Promise<void> => {
+    await invoke('replay_packet', {
+      hookType,
+      socket,
+      data,
+      dstAddr: dstAddr || null,
+    });
+  },
 };
 
 /**

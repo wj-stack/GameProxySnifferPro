@@ -7,9 +7,10 @@ import {
   Plus, ArrowRightLeft, X, History, Send, Ban, Scissors, Anchor, RefreshCw, 
   Power, ToggleLeft as Toggle, ZapOff, GripHorizontal, ChevronsDown, ChevronsUp
 } from 'lucide-react';
-import { Packet, TargetProcess, InjectionStatus, Protocol, HookType, TamperRule } from './types';
+import { Packet, TargetProcess, InjectionStatus, Protocol, HookType, TamperRule, ExtendedPacket } from './types';
 import { useGameProxy } from './useGameProxy';
 import { formatHexInput, hexToRegexSpaced } from './utils';
+import { hookApi } from './api';
 
 // Reusable Custom Select Component
 interface CustomSelectProps {
@@ -202,12 +203,51 @@ const App: React.FC = () => {
   }, [endSelection]);
 
   // UI Helper Logic
-  const handleReplay = (pkt: Packet) => {
-    if (!state.globalHooksEnabled || state.injectionStatus !== InjectionStatus.HOOKED) return;
+  const handleReplay = async (pkt: ExtendedPacket) => {
+    if (!state.globalHooksEnabled || state.injectionStatus !== InjectionStatus.HOOKED) {
+      console.warn('Cannot replay: hooks not enabled or DLL not injected');
+      return;
+    }
+    
+    // 只支持发送类型的 hook
+    if (pkt.direction !== 'OUT' || !pkt.sourceHook) {
+      console.warn('Can only replay OUT packets with a valid source hook');
+      return;
+    }
+    
+    const supportedHooks = ['send', 'sendto', 'WSASend'];
+    if (!supportedHooks.includes(pkt.sourceHook)) {
+      console.warn(`Replay not supported for hook type: ${pkt.sourceHook}`);
+      return;
+    }
+    
+    if (!pkt.socket) {
+      console.warn('Cannot replay: socket information not available');
+      alert('无法重放：缺少 socket 信息');
+      return;
+    }
+    
     setReplayingId(pkt.id);
-    setTimeout(() => {
+    
+    try {
+      // 对于 sendto，需要目标地址
+      const dstAddr = pkt.sourceHook === 'sendto' ? pkt.remoteAddr : undefined;
+      
+      await hookApi.replayPacket(
+        pkt.sourceHook,
+        pkt.socket,
+        pkt.data,
+        dstAddr
+      );
+      
+      setTimeout(() => {
+        setReplayingId(null);
+      }, 600);
+    } catch (error) {
+      console.error('Failed to replay packet:', error);
       setReplayingId(null);
-    }, 600);
+      alert('重放数据包失败，请检查控制台日志');
+    }
   };
 
   const handleCommitTamper = () => {
@@ -567,10 +607,13 @@ const App: React.FC = () => {
               {selectedPacketId && (
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => { const p = state.packets.find(p => p.id === selectedPacketId); if(p) handleReplay(p); }} 
-                    disabled={!state.globalHooksEnabled || selectedPacket?.isBlocked}
+                    onClick={async () => { 
+                      const p = state.packets.find(p => p.id === selectedPacketId); 
+                      if(p) await handleReplay(p); 
+                    }} 
+                    disabled={!state.globalHooksEnabled || selectedPacket?.isBlocked || !selectedPacket?.socket}
                     className={`p-1.5 rounded border transition-all ${replayingId === selectedPacketId ? 'text-amber-500 bg-amber-500/20 animate-pulse' : 'text-amber-400 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'} disabled:opacity-30`}
-                    title="Replay Packet"
+                    title={!selectedPacket?.socket ? "Replay Packet (Socket info required)" : "Replay Packet"}
                   >
                     <RotateCcw className="w-4 h-4" />
                   </button>
