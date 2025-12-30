@@ -321,6 +321,13 @@ export const useGameProxy = () => {
       const result = await processApi.injectDll(selectedProcess.pid);
       console.log('DLL 注入成功:', result);
       setInjectionStatus(InjectionStatus.INJECTED);
+      setTimeout(async () => {
+        for (const rule of tamperRules) {
+          await tamperRuleApi.add(rule);
+          console.log(`[TamperRule] ${rule.name} 已添加`);
+        }
+        console.log('[TamperRule] 所有规则已添加');
+      }, 1000);
     } catch (error) {
       console.error('DLL 注入失败:', error);
       setInjectionStatus(InjectionStatus.ERROR);
